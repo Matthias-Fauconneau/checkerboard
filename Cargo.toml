@@ -1,8 +1,9 @@
-[package]
-name = "checkerboard"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
+package={name='checkerboard',version='0.0.0',edition='2021'}
 [dependencies]
+fehler='*'
+num={git='https://github.com/Matthias-Fauconneau/num'}
+vector={git='https://github.com/Matthias-Fauconneau/vector'}
+image={git='https://github.com/Matthias-Fauconneau/image'}
+imagers={package='image',version='*',default-features=false,features=['png']}
+ui={git='https://github.com/Matthias-Fauconneau/ui', features=['softbuffer']}
+#checkerboard='*' #{package='checkerboard-rs',version='*'}
