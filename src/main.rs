@@ -1,5 +1,5 @@
 #![feature(generators,iter_from_generator)]#![allow(non_camel_case_types)]
-pub type Error = Box<dyn std::error::Error>; use {std::cmp::{min,max}, num::{sq,sqrt}, fehler::throws, vector::{xy, int2, size}, image::Image, ui::{Widget, Target}};
+pub type Error = Box<dyn std::error::Error>; use {std::cmp::{min,max}, num::{sq,zero}, fehler::throws, vector::{xy, uint2, int2, vec2, size}, image::Image, ui::{Widget, Target}};
 fn main() {
     let image = imagers::open("ir.png").unwrap();
     
@@ -117,9 +117,80 @@ fn main() {
             target[xy{x,y}] = r as u8;
         }
     }
-    let max = *target.iter().max().unwrap();
+    let image = target;
+
+    let mut target = Image::zero(image.size);
+    {const R : u32 = 2;
+    for y in R..image.size.y-R { for x in R..image.size.x-R {
+        let center = image[xy{x, y}];
+        let mut flat = 0;
+        if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+            if (dx,dy) == (0,0) { continue; }
+            if image[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] > center { return false; }
+            if image[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] == center { flat += 1; }
+        }} true})() { if flat < 12 { target[xy{x,y}] = center; } }
+    }}}
+    let image = target;
+
+    let mut image = image;
+    let mut points = Vec/*::<(uint2,u8)>*/::new();
+    {const R : u32 = 4; // Merges close peaks (top left first)
+    for y in R..image.size.y-R { for x in R..image.size.x-R {
+        let value = image[xy{x,y}];
+        if value == 0 { continue; }
+        let mut flat = 0;
+        let mut sum : uint2 = zero();
+        for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+            let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
+            if image[p] == 0 { continue; }
+            //assert!(image[p] <= value);
+            flat += 1; 
+            sum += p;
+        }}
+        points.push( (vec2::from(int2::from(xy{x,y}+sum))/((1+flat) as f32), value) );
+        for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+            let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
+            image[p] = 0; // Merge small flat plateaus as single point 
+        }}
+    }}}
+
+    let (points, _, _) = points.select_nth_unstable_by(4*5+3*4, |(_,a), (_,b)| b.cmp(a));
+    let mut stack = Vec<vec2>::new();
+    //let p0 = points.iter().map(|(p,_| p).min().unwrap();
+    let p0 = points[0].1;
+    let mut points = Vec::from_iter(points.into_iter().map(|(p,_)| (atan(p-p0), length(p-p0), p)));
+    points.sort(); //_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
+    //points.into_iter().map(|x| x.2).collect()
+    
+        fn calc_z_coord_vector_product(a: &(f64, f64), b: &(f64, f64), c: &(f64, f64)) -> f64 {
+            (b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1)
+        }
+        
+        for point in points {
+            while stack.len() > 1
+                && calc_z_coord_vector_product(&stack[stack.len() - 2], &stack[stack.len() - 1], &point)
+                    < 0.
+            {
+                stack.pop();
+            }
+            stack.push(point);
+        }
+    
+        stack
+    }
+
+    let mut target = Image::zero(image.size);
+    for p in maximums {
+        target[uint2::from(/*p.0.round()*/xy{x: p.0.x.round(), y: p.0.y.round()})] = p.1;
+    }
+    let image = target;
+    
+    let max = *image.iter().max().unwrap();
+    let mut target = image;
     target.as_mut().map(|&v| (v as u16 * 0xFF / max as u16) as u8);
     let image = target;
+
+
 
     struct View<'t>(Image<&'t [u8]>);
     impl Widget for View<'_> {
