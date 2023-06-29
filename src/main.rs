@@ -1,8 +1,8 @@
 #![feature(generators,iter_from_generator)]#![allow(non_camel_case_types)]
-pub type Error = Box<dyn std::error::Error>; use {std::cmp::{min,max}, num::{sq,zero}, fehler::throws, vector::{xy, uint2, int2, vec2, size}, image::Image, ui::{Widget, Target}};
+pub type Error = Box<dyn std::error::Error>; use {std::cmp::{min,max}, num::{sq,zero}, fehler::throws, vector::{xy, uint2, int2, vec2, size, cross2, atan, norm}, image::Image, ui::{Widget, Target}};
 fn main() {
     let image = imagers::open("ir.png").unwrap();
-    
+
     /*use checkerboard::{CheckerboardSpecification, rufli::detect_checkerboard};
     let quads = detect_checkerboard(&image, &CheckerboardSpecification{width: 9, height: 7}).unwrap();
     println!("{quads:?}");*/
@@ -66,7 +66,7 @@ fn main() {
     }
     transpose.as_mut().zip_map(&image, |&low, &p| (128+(p as i16-low as i16).clamp(-128,127)) as u8);
     let image = transpose;
-    
+
     assert!(image.len() < 1<<16);
     let mut histogram : [u16; 256] = [0; 256];
     for &pixel in image.iter() { histogram[pixel as usize]+=1; }
@@ -144,47 +144,35 @@ fn main() {
             let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
             if image[p] == 0 { continue; }
             //assert!(image[p] <= value);
-            flat += 1; 
+            flat += 1;
             sum += p;
         }}
         points.push( (vec2::from(int2::from(xy{x,y}+sum))/((1+flat) as f32), value) );
         for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
             let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
-            image[p] = 0; // Merge small flat plateaus as single point 
+            image[p] = 0; // Merge small flat plateaus as single point
         }}
     }}}
 
     let (points, _, _) = points.select_nth_unstable_by(4*5+3*4, |(_,a), (_,b)| b.cmp(a));
-    let mut stack = Vec<vec2>::new();
     //let p0 = points.iter().map(|(p,_| p).min().unwrap();
-    let p0 = points[0].1;
-    let mut points = Vec::from_iter(points.into_iter().map(|(p,_)| (atan(p-p0), length(p-p0), p)));
-    points.sort(); //_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
+    let p0 = points[0].0;
+    points.sort_by(|(a,_),(b,_)|atan(a-p0).total_cmp(&atan(b-p0))); //_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
+    //let mut points = Vec::from_iter(points.iter().map(|&(p,_)| (atan(p-p0), norm(p-p0), p)));
+    //points.sort_by(|a,b|a.total_cmp(&b)); //_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
     //points.into_iter().map(|x| x.2).collect()
-    
-        fn calc_z_coord_vector_product(a: &(f64, f64), b: &(f64, f64), c: &(f64, f64)) -> f64 {
-            (b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1)
-        }
-        
-        for point in points {
-            while stack.len() > 1
-                && calc_z_coord_vector_product(&stack[stack.len() - 2], &stack[stack.len() - 1], &point)
-                    < 0.
-            {
-                stack.pop();
-            }
-            stack.push(point);
-        }
-    
-        stack
+    let mut hull = Vec/*::<vec2>*/::new();
+    for (p,_) in points {
+        while hull.len() > 1 && cross2(hull[hull.len() - 2]-p, hull[hull.len() - 1]-p) < 0. { hull.pop(); }
+        hull.push(p);
     }
 
     let mut target = Image::zero(image.size);
-    for p in maximums {
+    for p in hull {
         target[uint2::from(/*p.0.round()*/xy{x: p.0.x.round(), y: p.0.y.round()})] = p.1;
     }
     let image = target;
-    
+
     let max = *image.iter().max().unwrap();
     let mut target = image;
     target.as_mut().map(|&v| (v as u16 * 0xFF / max as u16) as u8);
