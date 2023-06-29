@@ -1,14 +1,8 @@
-#![feature(generators,iter_from_generator)]#![allow(non_camel_case_types)]
-pub type Error = Box<dyn std::error::Error>; use {std::cmp::{min,max}, num::{sq,zero}, fehler::throws, vector::{xy, uint2, int2, vec2, size, cross2, /*atan, norm*/}, image::Image, ui::{Widget, Target}};
-fn main() {
-    let image = imagers::open("ir.png").unwrap();
-
-    /*use checkerboard::{CheckerboardSpecification, rufli::detect_checkerboard};
-    let quads = detect_checkerboard(&image, &CheckerboardSpecification{width: 9, height: 7}).unwrap();
-    println!("{quads:?}");*/
-
-    let image = Image::new(vector::xy{x: image.width(), y: image.height()}, image.as_bytes());
-
+#![feature(generators,iter_from_generator,array_methods)]#![allow(non_camel_case_types,non_snake_case)]
+pub type Error = Box<dyn std::error::Error>;
+use {std::cmp::{min,max}, num::{sq,zero}, fehler::throws, vector::{xy, uint2, int2, vec2, size, cross2, norm}, image::Image, ui::{Widget, Target}};
+mod matrix; use matrix::*;
+fn checkerboard(image: Image<&[u8]>) -> [vec2; 4] {
     /*const R : u32 = 8;
     let mut target = Image::zero(image.size);
     for y in R..image.size.y-R {
@@ -82,12 +76,9 @@ fn main() {
         background_sum += i/*8*/ as u24 * count/*16*/ as u24;
         let foreground_count : u16 = image.len() as u16 - background_count;
         let foreground_sum : u24 = sum - background_sum;
-        //let foreground_mean = foreground_sum/foreground_count;
-        //let background_mean = background_sum/background_count;
         type u40 = u64;
-        /*assert!(foreground_sum < 1<<24);
-        assert!(background_sum < 1<<24);*/
-        let variance = sq((foreground_sum as u40*background_count as u40 - background_sum as u40*foreground_count as u40) as f64)/(foreground_count as u32*background_count as u32) as f64;
+        let variance = sq((foreground_sum as u40*background_count as u40 - background_sum as u40*foreground_count as u40) as f64)
+                            /   (foreground_count as u32*background_count as u32) as f64;
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u8, variance); }
     }
     let image = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
@@ -166,38 +157,61 @@ fn main() {
         while hull.len() > 1 && cross2(hull[hull.len() - 2].0-p, hull[hull.len() - 1].0-p) < 0. { hull.pop(); }
         hull.push((p,v));
     }*/
-    let mut p0 = *points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap();
-    let mut hull = vec![];
+    let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
+    let mut Q = vec![];
     loop {
-        hull.push(p0);
-        let mut next = points[0];
-        for &p in points.iter() {
-            if next==p0 || cross2(next.0-p0.0, p.0-p0.0) > 0. { next = p; }
+        Q.push(p0);
+        let mut next = points[0].0;
+        for &(p, _) in points.iter() {
+            if next==p0 || cross2(next-p0, p-p0) > 0. { next = p; }
         }
-        if next == hull[0] { break; }
+        if next == Q[0] { break; }
         p0 = next;
     }
 
      // Simplifies polygon to 4 corners
-    while hull.len() > 4 {
-        hull.remove(((0..hull.len()).map(|i| {
-            let [p0, p1, p2]  = std::array::from_fn(|j| hull[(i+j)%hull.len()].0);
+    while Q.len() > 4 {
+        Q.remove(((0..Q.len()).map(|i| {
+            let [p0, p1, p2]  = std::array::from_fn(|j| Q[(i+j)%Q.len()]);
             (cross2(p2-p0, p1-p0), i)
-        }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%hull.len());
+        }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%Q.len());
     }
 
-    let mut target = Image::zero(image.size);
-    for p in hull {
-        target[uint2::from(/*p.0.round()*/xy{x: p.0.x.round(), y: p.0.y.round()})] = p.1;
+    // First edge is long edge
+    if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
+    Q.try_into().unwrap()
+}
+
+pub fn affine_blit(target: &mut Image<&mut[u8]>, source: Image<&[u8]>, A: mat3) {
+    let size = target.size;
+    for y in 0..size.y { for x in 0..size.x {
+        let p = vec2::from(xy{x,y}.signed());
+        let p = vec2::from(source.size.signed())/vec2::from(target.size.signed())*p;
+        let p = apply(A, p);
+        if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
+        target[xy{x, y}] = source[uint2::from(p)];
+        //target[xy{x, y}] = image::bgr8::from(source[uint2::from(p)]).into();
+    }}
+}
+fn main() {
+    fn decode(path: impl AsRef<std::path::Path>) -> Image<Box<[u8]>> {
+        let image = imagers::open(path).unwrap();
+        Image::new(vector::xy{x: image.width(), y: image.height()}, image.into_bytes().into_boxed_slice())
     }
+    let images = ["nir","ir"].map(|name| decode(format!("{name}.png")));
+    let checkerboards = images.each_ref().map(|image |checkerboard(image.as_ref()));
+
+    let mut target = Image::zero(images[0].size);
+    affine_blit(&mut target.as_mut(), images[1].as_ref(), affine_transform(checkerboards));
+    /*for p in checkerboards[0] {
+        target[uint2::from(/*p.0.round()*/xy{x: p.x.round(), y: p.y.round()})] = 0xFF;
+    }*/
     let image = target;
 
     let max = *image.iter().max().unwrap();
     let mut target = image;
     target.as_mut().map(|&v| (v as u16 * 0xFF / max as u16) as u8);
     let image = target;
-
-
 
     struct View<'t>(Image<&'t [u8]>);
     impl Widget for View<'_> {
