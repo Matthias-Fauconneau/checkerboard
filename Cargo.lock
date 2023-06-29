@@ -1059,6 +1059,7 @@ checksum = "a464a4b34948a5f67fddd2b823c62d9d92e44be75058b99939eae6c5b6960b33"
 [[package]]
 name = "ui"
 version = "0.0.0"
+source = "git+https://github.com/Matthias-Fauconneau/ui#99472b49b9f4fc8ba6eb0f252548d9048454440b"
 dependencies = [
  "bytemuck",
  "fehler",

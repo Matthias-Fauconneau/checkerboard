@@ -1,5 +1,5 @@
 #![feature(generators,iter_from_generator)]#![allow(non_camel_case_types)]
-pub type Error = Box<dyn std::error::Error>; use {std::cmp::{min,max}, num::{sq,zero}, fehler::throws, vector::{xy, uint2, int2, vec2, size, cross2, atan, norm}, image::Image, ui::{Widget, Target}};
+pub type Error = Box<dyn std::error::Error>; use {std::cmp::{min,max}, num::{sq,zero}, fehler::throws, vector::{xy, uint2, int2, vec2, size, cross2, /*atan, norm*/}, image::Image, ui::{Widget, Target}};
 fn main() {
     let image = imagers::open("ir.png").unwrap();
 
@@ -133,7 +133,7 @@ fn main() {
     let image = target;
 
     let mut image = image;
-    let mut points = Vec/*::<(uint2,u8)>*/::new();
+    let mut points = Vec/*::<(vec2,u8)>*/::new();
     {const R : u32 = 4; // Merges close peaks (top left first)
     for y in R..image.size.y-R { for x in R..image.size.x-R {
         let value = image[xy{x,y}];
@@ -156,15 +156,34 @@ fn main() {
 
     let (points, _, _) = points.select_nth_unstable_by(4*5+3*4, |(_,a), (_,b)| b.cmp(a));
     //let p0 = points.iter().map(|(p,_| p).min().unwrap();
-    let p0 = points[0].0;
+    /*let p0 = points[0].0;
     points.sort_by(|(a,_),(b,_)|atan(a-p0).total_cmp(&atan(b-p0))); //_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
     //let mut points = Vec::from_iter(points.iter().map(|&(p,_)| (atan(p-p0), norm(p-p0), p)));
     //points.sort_by(|a,b|a.total_cmp(&b)); //_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
     //points.into_iter().map(|x| x.2).collect()
-    let mut hull = Vec/*::<vec2>*/::new();
-    for (p,_) in points {
-        while hull.len() > 1 && cross2(hull[hull.len() - 2]-p, hull[hull.len() - 1]-p) < 0. { hull.pop(); }
-        hull.push(p);
+    let mut hull = Vec::<(vec2, u8)>::new();
+    for &mut (p,v) in points.into_iter() {
+        while hull.len() > 1 && cross2(hull[hull.len() - 2].0-p, hull[hull.len() - 1].0-p) < 0. { hull.pop(); }
+        hull.push((p,v));
+    }*/
+    let mut p0 = *points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap();
+    let mut hull = vec![];
+    loop {
+        hull.push(p0);
+        let mut next = points[0];
+        for &p in points.iter() {
+            if next==p0 || cross2(next.0-p0.0, p.0-p0.0) > 0. { next = p; }
+        }
+        if next == hull[0] { break; }
+        p0 = next;
+    }
+
+     // Simplifies polygon to 4 corners
+    while hull.len() > 4 {
+        hull.remove(((0..hull.len()).map(|i| {
+            let [p0, p1, p2]  = std::array::from_fn(|j| hull[(i+j)%hull.len()].0);
+            (cross2(p2-p0, p1-p0), i)
+        }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%hull.len());
     }
 
     let mut target = Image::zero(image.size);
