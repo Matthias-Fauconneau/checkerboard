@@ -2,7 +2,7 @@
 pub type Error = Box<dyn std::error::Error>;
 use {std::cmp::{min,max}, num::{sq,zero}, fehler::throws, vector::{xy, uint2, int2, vec2, size, cross2, norm}, image::Image, ui::{Widget, Target}};
 mod matrix; use matrix::*;
-fn checkerboard(image: Image<&[u8]>) -> [vec2; 4] {
+fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], Image<Box<[u8]>>) {
     /*const R : u32 = 8;
     let mut target = Image::zero(image.size);
     for y in R..image.size.y-R {
@@ -98,7 +98,7 @@ fn checkerboard(image: Image<&[u8]>) -> [vec2; 4] {
     let mut target = Image::zero(image.size);
     for y in R..image.size.y-R {
         for x in R..image.size.x-R {
-            let r = (||{ for r in 1.. {
+            let r = (||{ for r in 1..R {
                 let circle = std::iter::from_generator(|| {
                     for x in x-r..x+r { yield xy{x,y: y-r}; yield xy{x,y: y+r}; }
                     for y in y-r+1..y+r-1 { yield xy{x: x-r, y}; yield xy{x: x-r, y}; }
@@ -145,18 +145,13 @@ fn checkerboard(image: Image<&[u8]>) -> [vec2; 4] {
         }}
     }}}
 
-    let (points, _, _) = points.select_nth_unstable_by(4*5+3*4, |(_,a), (_,b)| b.cmp(a));
-    //let p0 = points.iter().map(|(p,_| p).min().unwrap();
-    /*let p0 = points[0].0;
-    points.sort_by(|(a,_),(b,_)|atan(a-p0).total_cmp(&atan(b-p0))); //_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
-    //let mut points = Vec::from_iter(points.iter().map(|&(p,_)| (atan(p-p0), norm(p-p0), p)));
-    //points.sort_by(|a,b|a.total_cmp(&b)); //_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
-    //points.into_iter().map(|x| x.2).collect()
-    let mut hull = Vec::<(vec2, u8)>::new();
-    for &mut (p,v) in points.into_iter() {
-        while hull.len() > 1 && cross2(hull[hull.len() - 2].0-p, hull[hull.len() - 1].0-p) < 0. { hull.pop(); }
-        hull.push((p,v));
+    //let max = *target.iter().max().unwrap();
+    //target.as_mut().map(|&v| (v as u16 * 0xFF / max as u16) as u8);
+    /*for &(p, v) in &points {
+        image[uint2::from(/*p.0.round()*/xy{x: p.x.round(), y: p.y.round()})] = v;
     }*/
+
+    let (points, _, _) = points.select_nth_unstable_by(4*5+3*4, |(_,a), (_,b)| b.cmp(a));
     let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
     let mut Q = vec![];
     loop {
@@ -179,7 +174,10 @@ fn checkerboard(image: Image<&[u8]>) -> [vec2; 4] {
 
     // First edge is long edge
     if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
-    Q.try_into().unwrap()
+    for &p in &Q {
+        image[uint2::from(/*p.0.round()*/xy{x: p.x.round(), y: p.y.round()})] = 0xFF;
+    }
+    (Q.try_into().unwrap(), image)
 }
 
 pub fn affine_blit(target: &mut Image<&mut[u8]>, source: Image<&[u8]>, A: mat3) {
@@ -198,15 +196,23 @@ fn main() {
         let image = imagers::open(path).unwrap();
         Image::new(vector::xy{x: image.width(), y: image.height()}, image.into_bytes().into_boxed_slice())
     }
-    let images = ["nir","ir"].map(|name| decode(format!("{name}.png")));
+    let [mut nir, ir] = ["nir","ir"].map(|name| decode(format!("{name}.png")));
+    pub fn invert(image: &mut Image<&mut [u8]>) { image.map(|&v| 0xFF-v) }
+    invert(&mut nir.as_mut());
+    let images = [nir, ir];
     let checkerboards = images.each_ref().map(|image |checkerboard(image.as_ref()));
 
-    let mut target = Image::zero(images[0].size);
-    affine_blit(&mut target.as_mut(), images[1].as_ref(), affine_transform(checkerboards));
-    /*for p in checkerboards[0] {
-        target[uint2::from(/*p.0.round()*/xy{x: p.x.round(), y: p.y.round()})] = 0xFF;
-    }*/
-    let image = target;
+    let image = if true {
+        let mut target = Image::zero(images[0].size);
+        let [(a, _), (b, _)] = checkerboards;
+        let checkerboards = [a,b];
+        affine_blit(&mut target.as_mut(), images[1].as_ref(), affine_transform(checkerboards));
+        target
+    } else {
+        let [(_, image), _] = checkerboards;
+        image
+    };
+    
 
     let max = *image.iter().max().unwrap();
     let mut target = image;
