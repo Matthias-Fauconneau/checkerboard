@@ -1,8 +1,8 @@
 package={name='checkerboard',version='0.0.0',edition='2021'}
 [dependencies]
-fehler='*'
 num={git='https://github.com/Matthias-Fauconneau/num'}
 vector={git='https://github.com/Matthias-Fauconneau/vector',features=['unstable']}#norm
+nalgebra='*'
 image={git='https://github.com/Matthias-Fauconneau/image'}
 imagers={package='image',version='*',default-features=false,features=['png']}
 ui={git='https://github.com/Matthias-Fauconneau/ui', default-features=false, features=['softbuffer']}
@@ -10,3 +10,5 @@ ui={git='https://github.com/Matthias-Fauconneau/ui', default-features=false, fea
 #rustix={git='https://github.com/bytecodealliance/rustix'}
 #[patch.'https://github.com/Matthias-Fauconneau/ui']
 #ui={path='../ui'}
+[patch.'https://github.com/Matthias-Fauconneau/vector']
+vector={path='../vector'}
