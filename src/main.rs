@@ -1,5 +1,5 @@
 #![feature(generators,iter_from_generator,array_methods,slice_flatten)]#![allow(non_camel_case_types,non_snake_case)]
-use ::image::Image;
+use {vector::vec2, ::image::Image};
 mod checkerboard; use checkerboard::*;
 mod matrix; use matrix::*;
 mod image; use image::*;
@@ -13,22 +13,22 @@ fn main() {
     pub fn invert(image: &mut Image<&mut [u8]>) { image.map(|&v| 0xFF-v) }
     invert(&mut nir.as_mut());
     let images = [nir, ir];
+    let images = {use vector::xy; [images[0].slice(xy{x: 0, y: 0}, xy{x: images[0].size.y, y: images[0].size.y}), images[1].slice(xy{x: images[0].size.x-images[0].size.y, y: 0}, xy{x: images[0].size.y, y: images[0].size.y})]};
     let checkerboards = images.each_ref().map(|image| checkerboard(image.as_ref()));
     let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
-    //use vector::xy;
-    //let checkerboards = [[xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}],[xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}]];
-    //let checkerboards = [[xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}],[xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.},xy{x: 0., y: 0.}]];
     let M = P.map(|P| {
-        let center = P.into_iter().sum::<vector::vec2>() / P.len() as f32;
-        let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vector::vec2>();
-        //(center, scale, p.map(|p| scale * (p-center)))
+        let center = P.into_iter().sum::<vec2>() / P.len() as f32;
+        let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();
         [[scale.x, 0., -scale.x*center.x], [0., scale.y, -scale.y*center.y], [0., 0., 1.]]
     });
-    //let A = direct_linear_transform(M.zip(checkerboards).map(|M,P| M.apply(P)));
-    let A = direct_linear_transform([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
+    let A = direct_linear_transform([P[0].map(|p| apply(M[0], p)), P[1].map(|p| apply(M[1], p))]);
+    /*println!("0 {:?}", P[0].map(|p| apply(M[0], p)));
+    println!("1 {:?}", P[1].map(|p| apply(M[1], p)));
+    println!("A {:?}", P[0].map(|p| apply(A, apply(M[0], p))));*/
     let A = mul(inverse(M[1]), mul(A, M[0]));
-    println!("0 {:?}", P[1]);
-    println!("A {:?}", P[0].map(|p| apply(A, p)));
+    /*println!("0 {:?}", P[0]);
+    println!("1 {:?}", P[1]);
+    println!("A {:?}", P[0].map(|p| apply(A, p)));*/
 
     let images : [_; 2] = std::array::from_fn(|i| {
         let mut target = Image::zero(images[i].size);
@@ -41,7 +41,7 @@ fn main() {
 
         for &p in &if i == 0 { P[0] } else { P[1].map(|p| apply(inverse(A), p)) } {
             use vector::{uint2, xy};
-            target[uint2::from(/*p.0.round()*/xy{x: p.x.round(), y: p.y.round()})] = 0xFF;
+            target[uint2::from(/*p.0.round()*/xy{x: p.x.round() as f32, y: p.y.round() as f32})] = 0xFF;
         }
         target
     });

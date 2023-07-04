@@ -10,7 +10,7 @@ pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
         {
             let mut row = row;
             for x in 0..source.size.x {
-                let value = source[xy{x,y}];
+                let value = source[vector::xy{x,y}];
                 let p = value as u32 | (value as u32)<<8 | (value as u32)<<16;
                 let p4 = [p; 4];
                 {
@@ -37,12 +37,11 @@ pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
     }
 }
 
-use {vector::{xy, uint2, vec2}, crate::matrix::{mat3, apply}};
+use {vector::{xy, uint2}, crate::matrix::{mat3, apply}};
 pub fn affine_blit(target: &mut Image<&mut[u8]>, source: Image<&[u8]>, A: mat3) {
     let size = target.size;
     for y in 0..size.y { for x in 0..size.x {
-        let p = vec2::from(xy{x,y}.signed());
-        //let p = vec2::from(source.size.signed())/vec2::from(target.size.signed())*p;
+        let p = xy{x: x as f32, y: y as f32};
         let p = apply(A, p);
         if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
         target[xy{x, y}] = source[uint2::from(p)];
