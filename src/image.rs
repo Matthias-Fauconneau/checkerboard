@@ -4,6 +4,7 @@ pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
     let target_size = source.size*(num/den); // largest integer fit
     let mut target = target.slice_mut((target.size-target_size)/2, target_size);
     let factor = target.size.x/source.size.x;
+    assert!(factor >= 1);
     let stride_factor = target.stride*factor;
     let mut row = target.as_mut_ptr();
     for y in 0..source.size.y {

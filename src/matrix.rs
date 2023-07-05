@@ -24,18 +24,24 @@ fn cofactor(M: mat3) -> mat3 { let M = |i: usize, j: usize| M[i][j]; [
 fn adjugate(M: mat3) -> mat3 { transpose(cofactor(M)) }
 fn scale(s: f32, M: mat3) -> mat3 { M.map(|row| row.map(|e| s*e)) }
 pub fn inverse(M: mat3) -> mat3 { scale(1./det(M), adjugate(M)) }
-pub fn direct_linear_transform(P: [[vec2; 4]; 2]) -> mat3 {
+/*#[allow(non_camel_case_types)] pub type mat2x3 = Matrix<2,3>;
+pub fn direct_linear_transform(P: [[vec2; 4]; 2]) -> mat2x3 {
+	let eigen = nalgebra::SMatrix::<f32, 4, 6>::from_row_slice(&transpose(P).map(|[p,P]| [P.y*p.x, -P.x*p.x, P.y*p.y, -P.x*p.y, P.y, -P.x]).flatten()).svd().v_t;
+	let H = eigen.eigenvectors.column(eigen.eigenvalues.argmin().0);
+	let H: [_; 6] = H.as_slice().try_into().unwrap();
+	//[[H[0],H[1]],[H[2],H[3]],[H[4],H[5]]]
+	[[H[0],H[2],H[4]],[H[1],H[3],H[5]]]
+}*/
+pub fn homography(P: [[vec2; 4]; 2]) -> mat3 {
 	let mut AtA = nalgebra::SMatrix::<f32, 9, 9>::zeros();
 	for [p,P] in transpose(P) {
 		let x = [P.x,P.y,1., 0.,0.,0., -p.x*P.x, -p.x*P.y, -p.x];
 		let y = [0.,0.,0., P.x,P.y,1., -p.y*P.x, -p.y*P.y, -p.y];
 		for j in 0..9 { for i in j..9 { AtA[(i,j)] += x[i]*x[j] + y[i]*y[j]; } } // Lower triangle
 	}
-	//dbg!(AtA);
-	let eigen = AtA.symmetric_eigen();//nalgebra::linalg::SymmetricEigen::new(AtA);
-	//let (Q, eigenvalues) = (Ql.eigenvectors, Ql.eigenvalues);
-	let H = eigen.eigenvectors.column(eigen.eigenvalues.argmin().0/*iter().enumerate().min_by(|&(_, &a), &(_, b)| a.total_cmp(b)).unwrap().0*/);
+	let eigen = AtA.symmetric_eigen();
+	let H = eigen.eigenvectors.column(eigen.eigenvalues.argmin().0);
 	let H: [_; 9] = H.as_slice().try_into().unwrap();
 	let H = H.map(|h| h / H[8]);
-	[[H[0],H[3],H[6]], [H[1],H[4],H[7]], [H[2],H[5],H[8]]]
+	[[H[0],H[1],H[2]], [H[3],H[4],H[5]], [H[6],H[7],H[8]]]
 }
