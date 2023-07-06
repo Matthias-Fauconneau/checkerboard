@@ -27,12 +27,12 @@ fn main() {
             //let Ok(payload) = self.camera.recv_blocking() else { return Ok(()) };
             //println!("blocking"); let Ok(payload) = payload_rx.recv_blocking() else { println!("continue"); continue; }; println!("ok");
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
-            let mut nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));           
+            let nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));           
             println!("{nir:?}");
-            let checkerboard = checkerboard(nir.as_ref());
+            let (checkerboard, mut debug) = checkerboard(nir.as_ref());
             println!("{checkerboard:?}");
-            for &p in &checkerboard { for y in -16..16 { for x in -16..16 { if let Some(p) = nir.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = if *p < 0x80 { 0xFF } else { 0 }; } }}}
-            downscale(target, nir.as_ref());
+            //for &p in &checkerboard { for y in -16..16 { for x in -16..16 { if let Some(p) = debug.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = if *p < 0x80 { 0xFF } else { 0 }; } }}}
+            downscale(target, debug.as_ref());
             
             /*let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
             let M = P.map(|P| {

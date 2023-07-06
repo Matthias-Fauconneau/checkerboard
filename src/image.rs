@@ -34,7 +34,8 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
         let mut target_row = target.as_ptr();
         for _ in 0..target.size.y { 
             for x in 0..target.size.x { 
-                (target_row.add(x as usize) as *mut u8x4).write_unaligned(u8x4::splat(((rows4.map(|row4| row4.read().cast::<u16>()).iter().sum::<u16x4>().reduce_sum() - min)*15/(max-min)) as u8));
+                (target_row.add(x as usize) as *mut u8x4).write_unaligned(u8x4::splat((rows4.map(|row4| row4.read().cast::<u16>()).iter().sum::<u16x4>().reduce_sum() / 16) as u8));
+                //(target_row.add(x as usize) as *mut u8x4).write_unaligned(u8x4::splat(((rows4.map(|row4| row4.read().cast::<u16>()).iter().sum::<u16x4>().reduce_sum() - min)*15/(max-min)) as u8));
                 rows4 = rows4.map(|row4| row4.add(1/*4xu8*/));
             }
             target_row = target_row.add(target.stride as usize);
