@@ -1,3 +1,20 @@
+pub fn neg(source: &[u8]) -> Box<[u8]> {
+    let mut target = Box::new_uninit_slice(source.len());
+    assert!(source.len()%64==0);
+    unsafe {
+        use std::simd::u8x64;
+        let len = source.len();
+        let source = source.as_ptr() as *const u8x64;
+        {
+            let target = target.as_mut_ptr() as *mut u8x64;
+            for i in (0..len).step_by(64) {
+                target.byte_add(i).write(u8x64::splat(0xFF)-source.byte_add(i).read());
+            }
+        }
+        target.assume_init()
+    }
+}
+
 use image::Image;
 
 pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {

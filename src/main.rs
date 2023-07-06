@@ -1,6 +1,6 @@
 #![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit)]#![allow(non_camel_case_types,non_snake_case)]
-use {vector::{xy/*, vec2*/}, ::image::Image};
-//mod checkerboard; use checkerboard::*;
+use {vector::{xy, int2}, ::image::Image};
+mod checkerboard; use checkerboard::*;
 //mod matrix; use matrix::*;
 mod image; use image::*;
 
@@ -27,27 +27,14 @@ fn main() {
             //let Ok(payload) = self.camera.recv_blocking() else { return Ok(()) };
             //println!("blocking"); let Ok(payload) = payload_rx.recv_blocking() else { println!("continue"); continue; }; println!("ok");
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
-            fn neg(source: &[u8]) -> Box<[u8]> {
-                let mut target = Box::new_uninit_slice(source.len());
-                assert!(source.len()%64==0);
-                unsafe {
-                    use std::simd::u8x64;
-                    let len = source.len();
-                    let source = source.as_ptr() as *const u8x64;
-                    {
-                        let target = target.as_mut_ptr() as *mut u8x64;
-                        for i in (0..len).step_by(64) {
-                            target.byte_add(i).write(u8x64::splat(0xFF)-source.byte_add(i).read());
-                        }
-                    }
-                    target.assume_init()
-                }
-            }
-            let source = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));
-            downscale(target, source.as_ref());
+            let mut nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));           
+            println!("{nir:?}");
+            let checkerboard = checkerboard(nir.as_ref());
+            println!("{checkerboard:?}");
+            for &p in &checkerboard { for y in -16..16 { for x in -16..16 { if let Some(p) = nir.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = if *p < 0x80 { 0xFF } else { 0 }; } }}}
+            downscale(target, nir.as_ref());
             
-            /*let nir = checkerboard(nir.as_ref());
-            let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
+            /*let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
             let M = P.map(|P| {
                 let center = P.into_iter().sum::<vec2>() / P.len() as f32;
                 let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();

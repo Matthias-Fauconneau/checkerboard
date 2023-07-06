@@ -27,24 +27,24 @@ pub fn checkerboard(image: Image<&[u8]>) -> [vec2; 4] {
     transpose.as_mut().zip_map(&image, |&low, &p| (128+(p as i16-low as i16).clamp(-128,127)) as u8);
     let image = transpose;
 
-    assert!(image.len() < 1<<16);
-    let mut histogram : [u16; 256] = [0; 256];
-    for &pixel in image.iter() { histogram[pixel as usize]+=1; }
-    type u24 = u32;
-    let sum : u24 = histogram.iter().enumerate().map(|(i,&v)| i/*8*/ as u24 * v/*16*/ as u24).sum();
+    assert!(image.len() < 1<<24);
+    let mut histogram : [u32; 256] = [0; 256];
+    for &pixel in image.iter() { histogram[pixel as usize] += 1; }
+    let sum : u32 = histogram.iter().enumerate().map(|(i,&v)| i/*8*/ as u32 * v/*24*/ as u32).sum();
     let mut threshold : u8 = 0;
-    let mut maximum_variance = 0.;
-    let (mut background_count, mut background_sum) : (u16, u32)= (0, 0);
+    let mut maximum_variance = 0;
+    type u24 = u32;
+    let (mut background_count, mut background_sum) : (u24, u32)= (0, 0);
     for (i, &count) in histogram.iter().enumerate() {
         background_count += count;
         if background_count == 0 { continue; }
         if background_count as usize == image.len() { break; }
-        background_sum += i/*8*/ as u24 * count/*16*/ as u24;
-        let foreground_count : u16 = image.len() as u16 - background_count;
-        let foreground_sum : u24 = sum - background_sum;
-        type u40 = u64;
-        let variance = sq((foreground_sum as u40*background_count as u40 - background_sum as u40*foreground_count as u40) as f64)
-                            /   (foreground_count as u32*background_count as u32) as f64;
+        background_sum += i/*8*/ as u32 * count/*24*/ as u32;
+        let foreground_count : u24 = image.len() as u24 - background_count;
+        let foreground_sum : u32 = sum - background_sum;
+        type u48 = u64;
+        let variance = sq((foreground_sum as u64*background_count as u64 - background_sum as u64*foreground_count as u64) as u128)
+                            / (foreground_count as u48*background_count as u48) as u128;
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u8, variance); }
     }
     let image = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
