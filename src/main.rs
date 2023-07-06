@@ -18,25 +18,25 @@ fn main() {
     let checkerboards = images.each_ref().map(|image| checkerboard(image.as_ref()));
     let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
     let M = P.map(|P| {
-        /*let center = P.into_iter().sum::<vec2>() / P.len() as f32;
+        let center = P.into_iter().sum::<vec2>() / P.len() as f32;
         let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();
         //[[scale.x, 0., -scale.x*center.x], [0., scale.y, -scale.y*center.y]]
-        [[scale.x, 0., -scale.x*center.x], [0., scale.y, -scale.y*center.y], [0., 0., 1.]]*/
+        [[scale.x, 0., -scale.x*center.x], [0., scale.y, -scale.y*center.y], [0., 0., 1.]]
         //[[scale.x, 0., 0.], [0., scale.y, 0.], [0., 0., 1.]]
         //let scale = num::sqrt(scale.x*scale.y); //println!("{scale}");
         //let scale = 1./40.;
         //[[scale, 0., 0.], [0., scale, 0.], [0., 0., 1.]]
-        identity()
+        //identity()
     });
     let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
     //let A = direct_linear_transform([P[0].map(|p| apply(M[0], p)), P[1].map(|p| apply(M[1], p))]);
     //let A = identity();
-    //let A = mul(inverse(M[1]), mul(A, M[0]));
+    let A = mul(inverse(M[1]), mul(A, M[0]));
     /*println!("1 {:?}", P[1]);
     println!("0 {:?}", P[0]);
     println!("A {:?}", P[1].map(|p| apply(A, p)));*/
 
-    if true {
+    if false {
         struct Plot<'t>(&'t [vec2]);
         impl ui::Widget for Plot<'_> { 
             #[ui::throws(ui::Error)] fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) { 

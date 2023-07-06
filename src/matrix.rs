@@ -8,7 +8,7 @@ pub fn identity<const M: usize, const N:usize>() -> [[f32; M]; N] { eval(|i| eva
 pub fn mul<const M: usize, const N:usize, const P:usize>(a: Matrix<M,N>, b: Matrix<N,P>) -> Matrix<M,P> { eval(|i| eval(|j| (0..N).map(|k| a[i][k]*b[k][j]).sum())) }
 
 use vector::vec2;
-pub fn apply(M: mat3, v: vec2) -> vec2 { eval(|i| v.x*M[i][0]+v.y*M[i][1]+M[i][2]).into() }
+pub fn apply(M: mat3, v: vec2) -> vec2 { vec2::from(eval(|i| v.x*M[i][0]+v.y*M[i][1]+M[i][2]))/(v.x*M[2][0]+v.y*M[2][1]+M[2][2]) }
 
 fn det(M: mat3) -> f32 {
 	let M = |i: usize, j: usize| M[i][j];
