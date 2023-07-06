@@ -1,4 +1,4 @@
-#![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd)]#![allow(non_camel_case_types,non_snake_case)]
+#![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit)]#![allow(non_camel_case_types,non_snake_case)]
 use {vector::{xy/*, vec2*/}, ::image::Image};
 //mod checkerboard; use checkerboard::*;
 //mod matrix; use matrix::*;
@@ -27,7 +27,23 @@ fn main() {
             //let Ok(payload) = self.camera.recv_blocking() else { return Ok(()) };
             //println!("blocking"); let Ok(payload) = payload_rx.recv_blocking() else { println!("continue"); continue; }; println!("ok");
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
-            let source = Image::from_iter(xy{x: width as u32, y: height as u32}, payload.image().unwrap().iter().map(|&v| 0xFF-v));
+            fn neg(source: &[u8]) -> Box<[u8]> {
+                let mut target = Box::new_uninit_slice(source.len());
+                assert!(source.len()%64==0);
+                unsafe {
+                    use std::simd::u8x64;
+                    let len = source.len();
+                    let source = source.as_ptr() as *const u8x64;
+                    {
+                        let target = target.as_mut_ptr() as *mut u8x64;
+                        for i in (0..len).step_by(64) {
+                            target.byte_add(i).write(u8x64::splat(0xFF)-source.byte_add(i).read());
+                        }
+                    }
+                    target.assume_init()
+                }
+            }
+            let source = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));
             downscale(target, source.as_ref());
             
             /*let nir = checkerboard(nir.as_ref());

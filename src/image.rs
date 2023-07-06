@@ -7,7 +7,9 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
     let target = target.slice_mut((target.size-target_size)/2, target_size);
     let factor = source.size.x/target.size.x;
     assert_eq!(factor, 4, "{source:?} {num} {den} {target:?} {factor}");
-    let [min, max] = [*source.iter().min().unwrap() as u16, *source.iter().max().unwrap() as u16].map(|v| v*factor as u16*factor as u16);
+    let [min, max] = [*source.iter().min().unwrap() as u16, *source.iter().max().unwrap() as u16].map(|v| (v*factor as u16*factor as u16+14)/15);
+    let _3source_stride = 3*source.stride as usize;
+    assert_eq!(source.size.x+_3source_stride as u32, 4*source.stride);
     unsafe {
         use std::simd::{SimdUint, u8x4, u16x4};
         let mut rows4 : [_; 4] = std::array::from_fn(|i| source.as_ptr().add(i*source.stride as usize) as *const u8x4);
@@ -15,10 +17,11 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
         let mut target_row = target.as_ptr();
         for _ in 0..target.size.y { 
             for x in 0..target.size.x { 
-                (target_row.add(x as usize) as *mut u8x4).write_unaligned(u8x4::splat(((rows4.map(|row4| row4.read().cast::<u16>()).iter().sum::<u16x4>().reduce_sum() - min)*0xFF/(max-min)) as u8));
-                rows4 = rows4.map(|row4| row4.add(4));
+                (target_row.add(x as usize) as *mut u8x4).write_unaligned(u8x4::splat(((rows4.map(|row4| row4.read().cast::<u16>()).iter().sum::<u16x4>().reduce_sum() - min)*15/(max-min)) as u8));
+                rows4 = rows4.map(|row4| row4.add(1/*4xu8*/));
             }
             target_row = target_row.add(target.stride as usize);
+            rows4 = rows4.map(|row4| row4.byte_add(_3source_stride));
         }
     }
 }
