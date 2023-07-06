@@ -1,4 +1,4 @@
-pub fn neg(source: &[u8]) -> Box<[u8]> {
+/*pub fn neg(source: &[u8]) -> Box<[u8]> {
     let mut target = Box::new_uninit_slice(source.len());
     assert!(source.len()%64==0);
     unsafe {
@@ -13,7 +13,7 @@ pub fn neg(source: &[u8]) -> Box<[u8]> {
         }
         target.assume_init()
     }
-}
+}*/
 
 use image::Image;
 

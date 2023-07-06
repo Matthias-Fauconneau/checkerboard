@@ -27,8 +27,8 @@ fn main() {
             //let Ok(payload) = self.camera.recv_blocking() else { return Ok(()) };
             //println!("blocking"); let Ok(payload) = payload_rx.recv_blocking() else { println!("continue"); continue; }; println!("ok");
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
-            //let nir = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
-            let nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));
+            let nir = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
+            //let nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));
             println!("{nir:?}");
             let (checkerboard, debug) = checkerboard(nir.as_ref());
             println!("{checkerboard:?}");

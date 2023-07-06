@@ -53,16 +53,16 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], Image<Box<[u8]>>) {
                             / (foreground_count as u48*background_count as u48) as u128;
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u8, variance); }
     }
-    let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
+    //let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
     //return ([vec2::from(binary.size/2); 4], binary);
 
-    fn distance(binary: Image<&[u8]>) -> Image<Box<[u8]>> {
-        let size = binary.size;
-        let mut G = Image::/*uninitialized*/zero(size);
+    fn distance(image: Image<&[u8]>, threshold: u8) -> Image<Box<[u8]>> {
+        let size = image.size;
+        let mut G = Image::uninitialized(size);
         for x in 0..size.x {
-            G[xy{x, y: 0}] = if binary[xy{x, y: 0}] > 0 { 0 } else { size.x+size.y };
+            G[xy{x, y: 0}] = if image[xy{x, y: 0}] > threshold { 0 } else { size.x+size.y };
             for y in 1..size.y {
-                G[xy{x, y}] = if binary[xy{x, y}] > 0 { 0 } else { 1+G[xy{x, y: y-1}] };
+                G[xy{x, y}] = if image[xy{x, y}] > threshold { 0 } else { 1+G[xy{x, y: y-1}] };
             }
             for y in (0..size.y-1).rev() {
                 if G[xy{x, y: y+1}] < G[xy{x, y}] {
@@ -70,8 +70,8 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], Image<Box<[u8]>>) {
                 }
             }
         }
-        let mut S = /*unsafe{Box::new_uninit_slice(size.x as usize).assume_init()}*/vec![0; size.x as usize].into_boxed_slice();
-        let mut T = /*unsafe{Box::new_uninit_slice(size.x as usize).assume_init()}*/vec![0; size.x as usize].into_boxed_slice();
+        let mut S = unsafe{Box::new_uninit_slice(size.x as usize).assume_init()};
+        let mut T = unsafe{Box::new_uninit_slice(size.x as usize).assume_init()};
         let mut distance = Image::/*uninitialized*/zero(size);
         for y in 0..size.y {
             let mut q = 0i16;
@@ -100,7 +100,7 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], Image<Box<[u8]>>) {
         }
         distance
     }
-    let distance = distance(binary.as_ref());
+    let distance = distance(image, threshold);
     ([vec2::from(distance.size/2); 4], distance)
 
     /*trait ToDistance { fn to_distance(&self) -> u32; }
