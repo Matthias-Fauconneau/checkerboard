@@ -24,7 +24,7 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
     let target = target.slice_mut((target.size-target_size)/2, target_size);
     let factor = source.size.x/target.size.x;
     assert_eq!(factor, 4, "{source:?} {num} {den} {target:?} {factor}");
-    let [min, max] = [*source.iter().min().unwrap() as u16, *source.iter().max().unwrap() as u16].map(|v| (v*factor as u16*factor as u16+14)/15);
+    //let [min, max] = [*source.iter().min().unwrap() as u16, *source.iter().max().unwrap() as u16].map(|v| (v*factor as u16*factor as u16+14)/15);
     let _3source_stride = 3*source.stride as usize;
     assert_eq!(source.size.x+_3source_stride as u32, 4*source.stride);
     unsafe {

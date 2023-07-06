@@ -1,5 +1,5 @@
 #![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit)]#![allow(non_camel_case_types,non_snake_case)]
-use {vector::{xy, int2}, ::image::Image};
+use {vector::{xy/*, int2*/}, ::image::Image};
 mod checkerboard; use checkerboard::*;
 //mod matrix; use matrix::*;
 mod image; use image::*;
@@ -27,9 +27,10 @@ fn main() {
             //let Ok(payload) = self.camera.recv_blocking() else { return Ok(()) };
             //println!("blocking"); let Ok(payload) = payload_rx.recv_blocking() else { println!("continue"); continue; }; println!("ok");
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
-            let nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));           
+            //let nir = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
+            let nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));
             println!("{nir:?}");
-            let (checkerboard, mut debug) = checkerboard(nir.as_ref());
+            let (checkerboard, debug) = checkerboard(nir.as_ref());
             println!("{checkerboard:?}");
             //for &p in &checkerboard { for y in -16..16 { for x in -16..16 { if let Some(p) = debug.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = if *p < 0x80 { 0xFF } else { 0 }; } }}}
             downscale(target, debug.as_ref());
