@@ -1,5 +1,29 @@
 use image::Image;
-pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
+
+pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
+    let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
+    let target_size = source.size/((den+num-1)/num); // largest integer downscale
+    assert!(target_size <= target.size);
+    let target = target.slice_mut((target.size-target_size)/2, target_size);
+    let factor = source.size.x/target.size.x;
+    assert_eq!(factor, 4, "{source:?} {num} {den} {target:?} {factor}");
+    let [min, max] = [*source.iter().min().unwrap() as u16, *source.iter().max().unwrap() as u16].map(|v| v*factor as u16*factor as u16);
+    unsafe {
+        use std::simd::{SimdUint, u8x4, u16x4};
+        let mut rows4 : [_; 4] = std::array::from_fn(|i| source.as_ptr().add(i*source.stride as usize) as *const u8x4);
+        assert!(source.stride == source.size.x);
+        let mut target_row = target.as_ptr();
+        for _ in 0..target.size.y { 
+            for x in 0..target.size.x { 
+                (target_row.add(x as usize) as *mut u8x4).write_unaligned(u8x4::splat(((rows4.map(|row4| row4.read().cast::<u16>()).iter().sum::<u16x4>().reduce_sum() - min)*0xFF/(max-min)) as u8));
+                rows4 = rows4.map(|row4| row4.add(4));
+            }
+            target_row = target_row.add(target.stride as usize);
+        }
+    }
+}
+
+/*pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
     let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
     let target_size = source.size*(num/den); // largest integer fit
     let mut target = target.slice_mut((target.size-target_size)/2, target_size);
@@ -36,9 +60,9 @@ pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
         }
         row = unsafe{row.add(stride_factor as usize)};
     }
-}
+}*/
 
-use {vector::{xy, uint2}, crate::matrix::{mat3, apply}};
+/*use {vector::{xy, uint2}, crate::matrix::{mat3, apply}};
 pub fn affine_blit(target: &mut Image<&mut[u8]>, source: Image<&[u8]>, A: mat3) {
     let size = target.size;
     for y in 0..size.y { for x in 0..size.x {
@@ -47,4 +71,4 @@ pub fn affine_blit(target: &mut Image<&mut[u8]>, source: Image<&[u8]>, A: mat3) 
         if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
         target[xy{x, y}] = source[uint2::from(p)];
     }}
-}
+}*/

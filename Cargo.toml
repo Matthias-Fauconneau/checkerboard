@@ -6,6 +6,7 @@ vector={git='https://github.com/Matthias-Fauconneau/vector',features=['unstable'
 nalgebra='*'
 image={git='https://github.com/Matthias-Fauconneau/image'}
 imagers={package='image',version='*',default-features=false,features=['png']}
+cameleon={version='*', features=['libusb']}
 ui={git='https://github.com/Matthias-Fauconneau/ui', features=['text']}
 [patch.'https://github.com/Matthias-Fauconneau/num']
 num={path='../num'}
