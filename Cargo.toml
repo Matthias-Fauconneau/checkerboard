@@ -1,12 +1,13 @@
 package={name='checkerboard',version='0.0.0',edition='2021'}
 [dependencies]
+bytemuck='*'
 fehler='*'
 num={git='https://github.com/Matthias-Fauconneau/num'}
 vector={git='https://github.com/Matthias-Fauconneau/vector',features=['unstable']}#norm
 nalgebra='*'
 image={git='https://github.com/Matthias-Fauconneau/image'}
-imagers={package='image',version='*',default-features=false,features=['png']}
 cameleon={version='*', features=['libusb']}
+uvc={package='uvc-sys', version='*'}
 ui={git='https://github.com/Matthias-Fauconneau/ui', features=['text']}
 [patch.'https://github.com/Matthias-Fauconneau/num']
 num={path='../num'}

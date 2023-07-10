@@ -1,5 +1,5 @@
 use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Image};
-pub fn checkerboard(image: Image<&[u8]>) -> Option<[vec2; 4]> { //([vec2; 4], (Image<Box<[u8]>>,[Vec<(vec2, u32)>; /*2*/1])) {
+#[allow(dead_code)] pub fn checkerboard(image: Image<&[u16]>) -> Option<[vec2; 4]> { //([vec2; 4], (Image<Box<[u8]>>,[Vec<(vec2, u32)>; /*2*/1])) {
     // Low pass (blur~denoise)    
     /*let source = image;
     let mut target = Image::uninitialized(source.size);
@@ -35,26 +35,26 @@ pub fn checkerboard(image: Image<&[u8]>) -> Option<[vec2; 4]> { //([vec2; 4], (I
     }
     let image = target;*/
 
-    fn transpose_low_pass_1D<const R: u32>(source: Image<&[u8]>) -> Image<Box<[u8]>> {
+    fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
         let mut transpose = Image::uninitialized(source.size.yx());
-        /*const*/let factor : u16 = 0x100 / (R+1+R) as u16;
+        /*const*/let factor : u32 = 0x10000 / (R+1+R) as u32;
         for y in 0..source.size.y {
-            let mut sum = (source[xy{x: 0, y}] as u16)*(R as u16);
-            for x in 0..R { sum += source[xy{x, y}] as u16; }
+            let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
+            for x in 0..R { sum += source[xy{x, y}] as u32; }
             for x in 0..R {
-                sum += source[xy{x: x+R, y}] as u16;
-                transpose[xy{x: y, y: x}] = ((sum * factor) >> 8) as u8;
-                sum -= source[xy{x: 0, y}] as u16;
+                sum += source[xy{x: x+R, y}] as u32;
+                transpose[xy{x: y, y: x}] = ((sum * factor) >> 16) as u16;
+                sum -= source[xy{x: 0, y}] as u32;
             }
             for x in R..source.size.x-R {
-                sum += source[xy{x: x+R, y}] as u16;
-                transpose[xy{x: y, y: x}] = ((sum * factor) >> 8) as u8;
-                sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u16;
+                sum += source[xy{x: x+R, y}] as u32;
+                transpose[xy{x: y, y: x}] = ((sum * factor) >> 16) as u16;
+                sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
             }
             for x in source.size.x-R..source.size.x {
-                sum += source[xy{x: source.size.x-1, y}] as u16;
-                transpose[xy{x: y, y: x}] = ((sum /* * factor*/) >> 8) as u8;
-                sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u16;
+                sum += source[xy{x: source.size.x-1, y}] as u32;
+                transpose[xy{x: y, y: x}] = ((sum /* * factor*/) >> 16) as u16;
+                sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
             }
         }
         transpose
@@ -69,27 +69,28 @@ pub fn checkerboard(image: Image<&[u8]>) -> Option<[vec2; 4]> { //([vec2; 4], (I
     let image = high_pass.as_ref();*/
 
     assert!(image.len() < 1<<24);
-    let mut histogram : [u32; 256] = [0; 256];
+    let mut histogram : [u32; 65536] = [0; 65536];
     for &pixel in image.iter() { histogram[pixel as usize] += 1; }
-    let sum : u32 = histogram.iter().enumerate().map(|(i,&v)| i/*8*/ as u32 * v/*24*/ as u32).sum();
-    let mut threshold : u8 = 0;
+    type u40 = u64;
+    let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
+    let mut threshold : u16 = 0;
     let mut maximum_variance = 0;
     type u24 = u32;
-    let (mut background_count, mut background_sum) : (u24, u32)= (0, 0);
+    let (mut background_count, mut background_sum) : (u24, u40)= (0, 0);
     for (i, &count) in histogram.iter().enumerate() {
         background_count += count;
         if background_count == 0 { continue; }
         if background_count as usize == image.len() { break; }
-        background_sum += i/*8*/ as u32 * count/*24*/ as u32;
+        background_sum += i/*16*/ as u40 * count/*24*/ as u40;
         let foreground_count : u24 = image.len() as u24 - background_count;
-        let foreground_sum : u32 = sum - background_sum;
+        let foreground_sum : u40 = sum - background_sum;
         type u48 = u64;
         let variance = sq((foreground_sum as u64*background_count as u64 - background_sum as u64*foreground_count as u64) as u128)
                             / (foreground_count as u48*background_count as u48) as u128;
-        if variance >= maximum_variance { (threshold, maximum_variance) = (i as u8, variance); }
+        if variance >= maximum_variance { (threshold, maximum_variance) = (i as u16, variance); }
     }
 
-    fn distance(image: Image<&[u8]>, threshold: u8, inverse: bool) -> Image<Box<[u32]>> {
+    fn distance(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u32]>> {
         let size = image.size;
         let mut G = Image::uninitialized(size);
         for x in 0..size.x {
