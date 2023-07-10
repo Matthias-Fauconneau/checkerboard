@@ -1,21 +1,54 @@
-use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2/*, cross2, norm*/}, image::Image};
-pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], (Image<Box<[u8]>>, [(Image<Box<[u8]>>, Vec<(vec2, u8)>); 2])) {
-    /*// High pass
-    fn transpose_low_pass_1D(source: Image<&[u8]>) -> Image<Box<[u8]>> {
+use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Image};
+pub fn checkerboard(image: Image<&[u8]>) -> Option<[vec2; 4]> { //([vec2; 4], (Image<Box<[u8]>>,[Vec<(vec2, u32)>; /*2*/1])) {
+    // Low pass (blur~denoise)    
+    /*let source = image;
+    let mut target = Image::uninitialized(source.size);
+    for y in 0..target.size.y {
+        for x in 0..target.size.y {
+            let p = xy{x,y};
+            /*let mut sum = source[p] as u16*41;
+            for (w, dp) in [(26, [xy{x:0,y:-1},xy{x:-1,y:0},xy{x:1,y:0},xy{x:0,y:1}]),(16, [xy{x:-1,y:-1},xy{x:1,y:-1},xy{x:-1,y:1},xy{x:1,y:1}]),(7, [xy{x:0,y:-2},xy{x:-2,y:0},xy{x:2,y:0},xy{x:0,y:2}])] { for dp in dp {
+                use vector::ComponentWiseMinMax;
+                sum += w*source[(p.signed()+dp).component_wise_max(xy{x:0,y:0}).unsigned().component_wise_min(source.size-xy{x:1,y:1})] as u16
+            }}
+            target[p] = (sum/(41+26*4+16*4+7*4)) as u8;*/
+            /*let mut sum = source[p] as u32*159;
+            for (w, dp) in [(97, [xy{x:0,y:-1},xy{x:-1,y:0},xy{x:1,y:0},xy{x:0,y:1}]),(59, [xy{x:-1,y:-1},xy{x:1,y:-1},xy{x:-1,y:1},xy{x:1,y:1}]),(22, [xy{x:0,y:-2},xy{x:-2,y:0},xy{x:2,y:0},xy{x:0,y:2}])] { for dp in dp {
+                use vector::ComponentWiseMinMax;
+                sum += w*source[(p.signed()+dp).component_wise_max(xy{x:0,y:0}).unsigned().component_wise_min(source.size-xy{x:1,y:1})] as u32
+            }}
+            target[p] = (sum/(159+97*4+59*4+22*4)) as u8;*/
+            /*let mut sum = source[p] as u16;
+            for dp in [xy{x:0,y:-1},xy{x:-1,y:0},xy{x:1,y:0},xy{x:0,y:1},xy{x:-1,y:-1},xy{x:1,y:-1},xy{x:-1,y:1},xy{x:1,y:1},xy{x:0,y:-2},xy{x:-2,y:0},xy{x:2,y:0},xy{x:0,y:2}] {
+                use vector::ComponentWiseMinMax;
+                sum += source[(p.signed()+dp).component_wise_max(xy{x:0,y:0}).unsigned().component_wise_min(source.size-xy{x:1,y:1})] as u16
+            }
+            target[p] = (sum/13) as u8;*/
+            let mut sum = 0;
+            for dy in -4..=4 { for dx in -4..=4 {
+                let dp = xy{x: dx, y: dy};
+                use vector::ComponentWiseMinMax;
+                sum += source[(p.signed()+dp).component_wise_max(xy{x:0,y:0}).unsigned().component_wise_min(source.size-xy{x:1,y:1})] as u16
+            }}
+            target[p] = (sum/(9*9)) as u8;
+        }
+    }
+    let image = target;*/
+
+    fn transpose_low_pass_1D<const R: u32>(source: Image<&[u8]>) -> Image<Box<[u8]>> {
         let mut transpose = Image::uninitialized(source.size.yx());
-        const R : u32 = 127;
-        //const factor : u32 = 0x100 / (R+1+R) as u16;
+        /*const*/let factor : u16 = 0x100 / (R+1+R) as u16;
         for y in 0..source.size.y {
             let mut sum = (source[xy{x: 0, y}] as u16)*(R as u16);
             for x in 0..R { sum += source[xy{x, y}] as u16; }
             for x in 0..R {
                 sum += source[xy{x: x+R, y}] as u16;
-                transpose[xy{x: y, y: x}] = ((sum /* * factor*/) >> 8) as u8;
+                transpose[xy{x: y, y: x}] = ((sum * factor) >> 8) as u8;
                 sum -= source[xy{x: 0, y}] as u16;
             }
             for x in R..source.size.x-R {
                 sum += source[xy{x: x+R, y}] as u16;
-                transpose[xy{x: y, y: x}] = ((sum /* * factor*/) >> 8) as u8;
+                transpose[xy{x: y, y: x}] = ((sum * factor) >> 8) as u8;
                 sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u16;
             }
             for x in source.size.x-R..source.size.x {
@@ -26,11 +59,13 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], (Image<Box<[u8]>>, [(Ima
         }
         transpose
     }
+    let image = transpose_low_pass_1D::<11>(transpose_low_pass_1D::<11>(image.as_ref()).as_ref());
+
+    /*// High pass
     let source = image;
-    let mut low_then_high = transpose_low_pass_1D(transpose_low_pass_1D(source.as_ref()).as_ref());
+    let mut low_then_high = transpose_low_pass_1D::<127>(transpose_low_pass_1D::<127>(source.as_ref()).as_ref());
     low_then_high.as_mut().zip_map(&source, |&low, &p| (128+(p as i16-low as i16).clamp(-128,127)) as u8);
     let high_pass = low_then_high;
-    ([vec2::from(source.size/2); 4], high_pass)
     let image = high_pass.as_ref();*/
 
     assert!(image.len() < 1<<24);
@@ -53,10 +88,8 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], (Image<Box<[u8]>>, [(Ima
                             / (foreground_count as u48*background_count as u48) as u128;
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u8, variance); }
     }
-    //let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
-    //return ([vec2::from(binary.size/2); 4], binary);
 
-    fn distance(image: Image<&[u8]>, threshold: u8, inverse: bool) -> Image<Box<[u8]>> {
+    fn distance(image: Image<&[u8]>, threshold: u8, inverse: bool) -> Image<Box<[u32]>> {
         let size = image.size;
         let mut G = Image::uninitialized(size);
         for x in 0..size.x {
@@ -94,14 +127,13 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], (Image<Box<[u8]>>, [(Ima
             }
             for u in (0..size.x as u16).rev() {
                 let d = f(u, S[q as usize]);
-                distance[xy{x: u as u32, y}] = if d > 0x2000 { 0 } else { (d*0xFF/0x2000) as u8 }; // /((.sqrt()).min(255.) as u8; /~32
-                //distance[xy{x: u, y}] = f(u,S[q as usize]).min(0xFF) as u8;
+                distance[xy{x: u as u32, y}] = d; //if d > 0x2000 { 0 } else { (d*0xFF/0x2000) as u8 }; // /~32
                 if T[q as usize] == u { q = q - 1; }
             }
         }
         distance
     }
-    let points = [false, true].map(|inverse| {
+    let mut points = [false/*, true*/].map(|inverse| {
         let distance = distance(image.as_ref(), threshold, inverse);
         
         let max = {
@@ -109,7 +141,7 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], (Image<Box<[u8]>>, [(Ima
             let mut target = Image::zero(distance.size);
             for y in R..distance.size.y-R { for x in R..distance.size.x-R {
                 let center = distance[xy{x, y}];
-                if center < (16*16/32) as u8 { continue; }
+                if center < 64*64 { continue; }
                 let mut flat = 0;
                 if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
                     if (dx,dy) == (0,0) { continue; }
@@ -123,7 +155,7 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], (Image<Box<[u8]>>, [(Ima
 
         let mut max = max;
         let mut points = Vec::new();
-        {const R : u32 = 16; // Merges close peaks (top left first)
+        {const R : u32 = /*16*/64; // Merges close peaks (top left first)
         for y in R..max.size.y-R { for x in R..max.size.x-R {
             let value = max[xy{x,y}];
             if value == 0 { continue; }
@@ -141,12 +173,21 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], (Image<Box<[u8]>>, [(Ima
                 max[p] = 0; // Merge small flat plateaus as single point
             }}
         }}}
-        (distance, points)
+        points
     });
-    let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
-    return ([vec2::from(image.size/2); 4], (binary, points));
+    //let points = [points.each_ref(), points.each_ref().reverse()].map(|[a,b]| {
+    /*let points = {let [a,b]=points.each_ref(); [[a,b],[b,a]]}.map(|[a,b]| {
+        a.into_iter().filter(|a| b.iter().any(|b| vector::sq(a.0-b.0) < 3. * a.1 as f32*0x2000 as f32/0xFF as f32)).copied().collect()
+    });*/
+    //let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
+    //return ([vec2::from(image.size/2); 4], (binary, points));
 
-    /*let (points, _, _) = points.select_nth_unstable_by(4*5+3*4, |(_,a), (_,b)| b.cmp(a));
+    const N : usize = 4*5+3*4;
+    if points[0].len() < N { return None; } //return ([vec2::from(image.size/2); 4], (binary, points)); }
+
+    let points = &mut points[0];
+    let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
+    //return ([vec2::from(image.size/2); 4], (binary, [points.to_vec()]));
     let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
     let mut Q = vec![];
     loop {
@@ -169,5 +210,6 @@ pub fn checkerboard(image: Image<&[u8]>) -> ([vec2; 4], (Image<Box<[u8]>>, [(Ima
 
     // First edge is long edge
     if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
-    (Q.try_into().unwrap(), high_pass)*/
+    Some(Q.try_into().unwrap())
+    //(Q.try_into().unwrap(), high_pass)
 }

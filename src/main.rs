@@ -1,5 +1,5 @@
 #![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit)]#![allow(non_camel_case_types,non_snake_case)]
-use {vector::{xy, size, int2}, ::image::{Image, bgr8}};
+use {vector::{xy, size, int2}, ::image::{Image,bgr8}};
 mod checkerboard; use checkerboard::*;
 //mod matrix; use matrix::*;
 mod image; use image::*;
@@ -27,22 +27,27 @@ fn main() {
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
             let nir = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
             //let nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));
-            let (_checkerboard, (binary, debug)) = checkerboard(nir.as_ref());
-            //copy(target, nir.as_ref());
-            copy(target, binary.as_ref());
-            for (i, points) in debug.into_iter().map(|debug| debug.1).enumerate() {
+            //let (_checkerboard, (binary, debug)) = checkerboard(nir.as_ref());
+            copy(target, nir.as_ref());
+            //copy(target, binary.as_ref());
+            /*for (i, points) in debug.into_iter().enumerate() {
                 for (p,_) in points { 
                     let mut plot = |x,y| {
                         let Some(p) = (int2::from(p)+xy{x,y}).try_unsigned() else { return; };
-                        if let (Some(target), Some(source)) = (target.get_mut(p), Image::get(&nir, p)) { *target = if i>0 { ui::color::red.into() } else { ui::color::blue.into() }; }
+                        if let Some(target) = target.get_mut(p) { *target = if i>0 { ui::color::red.into() } else { ui::color::blue.into() }; }
                     };
                     for y in -16..16 { plot(0, y); }
                     for x in -16..16 { plot(x, 0); }
                 }
+            }*/
+            if let Some(checkerboard) = checkerboard(nir.as_ref()) {
+                println!("{checkerboard:?}");
+                for &p in &checkerboard { 
+                    let mut plot = |x,y| if let Some(p) = target.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = bgr8::from(0xFFu8).into(); };
+                    for y in -16..16 { plot(0, y); }
+                    for x in -16..16 { plot(x, 0); }
+                }
             }
-            //println!("{checkerboard:?}");
-            //for &p in &checkerboard { for y in -16..16 { for x in -16..16 { if let Some(p) = debug.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = if *p < 0x80 { 0xFF } else { 0 }; } }}}
-            
             /*let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
             let M = P.map(|P| {
                 let center = P.into_iter().sum::<vec2>() / P.len() as f32;
