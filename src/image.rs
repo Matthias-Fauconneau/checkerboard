@@ -15,9 +15,21 @@
     }
 }*/
 
-use image::Image;
+use {vector::xy, image::Image};
 
-pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
+pub fn copy(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
+    //assert_eq!(target.size, source.size);
+    //assert!(target.size <= source.size, "{target:?} {source:?}");
+    //let [min, max] = [*source.iter().min().unwrap() as u16, *source.iter().max().unwrap() as u16].map(|v| (v*factor as u16*factor as u16+14)/15);
+    let size = vector::component_wise_min(source.size, target.size);
+    for y in 0..size.y {
+        for x in 0..size.x {
+            unsafe{(&mut target[xy{x,y}] as *mut _ as *mut std::simd::u8x4).write_unaligned(std::simd::u8x4::splat(source[xy{x,y}]))};
+        }
+    }
+}
+
+/*pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
     let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
     let target_size = source.size/((den+num-1)/num); // largest integer downscale
     assert!(target_size <= target.size);
@@ -42,7 +54,7 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
             rows4 = rows4.map(|row4| row4.byte_add(_3source_stride));
         }
     }
-}
+}*/
 
 /*pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
     let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };

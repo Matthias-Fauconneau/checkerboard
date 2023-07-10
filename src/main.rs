@@ -1,6 +1,6 @@
 #![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit)]#![allow(non_camel_case_types,non_snake_case)]
-use {vector::{xy/*, int2*/}, ::image::Image};
-mod checkerboard; use checkerboard::*;
+use {vector::{xy, size}, ::image::Image};
+//mod checkerboard; use checkerboard::*;
 //mod matrix; use matrix::*;
 mod image; use image::*;
 
@@ -10,6 +10,18 @@ fn main() {
     let ref mut camera = cameras[0]; // find(|c| c.info().contains("U3-368xXLE-NIR")).unwrap()
     camera.open().unwrap();
     camera.load_context().unwrap();          
+	let mut params_ctxt = camera.params_ctxt().unwrap();
+    let acquisition_frame_rate = params_ctxt.node("AcquisitionFrameRate").unwrap().as_float(&params_ctxt).unwrap(); // 30fps
+	let max = acquisition_frame_rate.max(&mut params_ctxt).unwrap();
+    acquisition_frame_rate.set_value(&mut params_ctxt, max).unwrap(); // 28us
+    //println!("{}", acquisition_frame_rate.value(&mut params_ctxt).unwrap());
+    
+    let exposure_time = params_ctxt.node("ExposureTime").unwrap().as_float(&params_ctxt).unwrap();
+	exposure_time.set_value(&mut params_ctxt, 1000.).unwrap(); // 15ms=66Hz
+    
+    /*let gain_node = params_ctxt.node("Gain").unwrap().as_float(&params_ctxt).unwrap();
+	if gain_node.is_writable(&mut params_ctxt).unwrap() { gain_node.set_value(&mut params_ctxt, 0.1_f64).unwrap(); }*/
+	
     let nir = camera.start_streaming(3).unwrap();
  
     /*fn decode(path: impl AsRef<std::path::Path>) -> Image<Box<[u8]>> {
@@ -22,6 +34,7 @@ fn main() {
         nir: cameleon::payload::PayloadReceiver,
     }
     impl ui::Widget for View { 
+        fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
         #[ui::throws(ui::Error)] fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) { 
             let payload = self.nir.recv_blocking().unwrap();
             //let Ok(payload) = self.camera.recv_blocking() else { return Ok(()) };
@@ -29,11 +42,11 @@ fn main() {
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
             let nir = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
             //let nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));
-            println!("{nir:?}");
-            let (checkerboard, debug) = checkerboard(nir.as_ref());
-            println!("{checkerboard:?}");
+            //let (checkerboard, debug) = checkerboard(nir.as_ref());
+            //println!("{checkerboard:?}");
             //for &p in &checkerboard { for y in -16..16 { for x in -16..16 { if let Some(p) = debug.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = if *p < 0x80 { 0xFF } else { 0 }; } }}}
-            downscale(target, debug.as_ref());
+            //downscale(target, debug.as_ref());
+            copy(target, nir.as_ref());
             
             /*let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
             let M = P.map(|P| {
