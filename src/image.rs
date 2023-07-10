@@ -11,6 +11,7 @@ use {vector::xy, image::Image};
 
 pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) {
     let [min, max] = [*source.iter().min().unwrap(), *source.iter().max().unwrap()];
+    println!("{min} {max}");
     if !(min < max) { return; }
     let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
     let target_size = source.size*(num/den); // largest integer fit

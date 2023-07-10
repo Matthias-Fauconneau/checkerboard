@@ -20,8 +20,8 @@ fn main() {
         camera.start_streaming(3).unwrap()
     });
 
-    use uvc::uvc_stream_handle_t;
-    let ir = std::env::args().any(|a| a=="ir").then(|| { 
+    type IR = *mut uvc::uvc_stream_handle_t;
+    fn IR() -> IR {
         use std::ptr::null_mut;
         let mut uvc = null_mut();
         use uvc::*;
@@ -49,12 +49,14 @@ fn main() {
             return stream;
         }
         panic!();
-    });
+    }
+    let ir = std::env::args().any(|a| a=="ir").then(IR);
 
     struct View {
         #[allow(dead_code)] nir: Option<cameleon::payload::PayloadReceiver>,
-        ir: Option<*mut uvc_stream_handle_t>,
+        ir: Option<IR>,
         last_frame: Option<Image<Box<[u16]>>>,
+        last_key: char,
     }
     impl ui::Widget for View { 
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
@@ -72,7 +74,7 @@ fn main() {
                 //let frame = unsafe{*frame}; 
                 let uvc_frame_t{width, height, data, data_bytes, ..} = unsafe{*frame}; 
                 let ir = Image::new(xy{x: width as u32, y: height as u32}, unsafe{std::slice::from_raw_parts(data as *const u16, (data_bytes/2) as usize)});
-                self.last_frame = Some(Image::from_iter(ir.size, ir.iter().copied()));
+                self.last_frame = Some(ir.clone());
                 ir
             }).unwrap_or_else(|| {
                 data = Some(std::fs::read("ir").unwrap());
@@ -80,11 +82,14 @@ fn main() {
             });
             //let ir = Image::new(xy{x: frame.width as u32, y: frame.height as u32}, unsafe{std::slice::from_raw_parts(frame.data as *const u16, (frame.data_bytes/2) as usize)};  
             
-            //upscale(target, ir.as_ref());
-            //copy(target, nir.as_ref());
-
-            let binary = checkerboard(ir.as_ref()).unwrap_err();
-            upscale(target, binary.as_ref());
+            match self.last_key {
+                'b' => {
+                    let binary = checkerboard(ir.as_ref()).unwrap_err();
+                    upscale(target, binary.as_ref());
+                }
+                'o'|_ => upscale(target, ir.as_ref()),
+            }
+            //copy(target, nir.as_ref());          
 
             /*if let Some(checkerboard) = checkerboard(nir.as_ref()) {
                 //println!("{checkerboard:?}");
@@ -123,9 +128,13 @@ fn main() {
             //self.nir.send_back(payload);
         }
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {
-            if let ui::Event::Key(' ') = event { std::fs::write("ir", &bytemuck::cast_slice(self.last_frame.as_ref().unwrap())).unwrap(); }
+            if let ui::Event::Key(' ') = event { 
+                if self.ir.is_some() { std::fs::write("ir", &bytemuck::cast_slice(self.last_frame.as_ref().unwrap())).unwrap(); }
+                else { self.ir = Some(IR()); }
+            }
+            if let &ui::Event::Key(key) = event { self.last_key = key; return Ok(true); }
             Ok(self.nir.is_some()||self.ir.is_some()) 
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: None}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: None, last_key: 'o'}).unwrap();
 }
