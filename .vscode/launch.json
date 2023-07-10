@@ -38,5 +38,24 @@
             "args": [],
             "cwd": "${workspaceFolder}"
         },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "ir",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--release",
+                    "--bin=checkerboard",
+                    "--package=checkerboard"
+                ],
+                "filter": {
+                    "name": "checkerboard",
+                    "kind": "bin"
+                }
+            },
+            "args": ["ir"],
+            "cwd": "${workspaceFolder}"
+        },
     ]
 }

@@ -1,5 +1,5 @@
 use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Image};
-#[allow(dead_code)] pub fn checkerboard(image: Image<&[u16]>) -> Option<[vec2; 4]> { //([vec2; 4], (Image<Box<[u8]>>,[Vec<(vec2, u32)>; /*2*/1])) {
+#[allow(dead_code)] pub fn checkerboard(image: Image<&[u16]>) -> std::result::Result<[vec2; 4], Image<Box<[u16]>>> {
     // Low pass (blur~denoise)    
     /*let source = image;
     let mut target = Image::uninitialized(source.size);
@@ -59,7 +59,7 @@ use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, c
         }
         transpose
     }
-    let image = transpose_low_pass_1D::<11>(transpose_low_pass_1D::<11>(image.as_ref()).as_ref());
+    //let image = transpose_low_pass_1D::<11>(transpose_low_pass_1D::<11>(image.as_ref()).as_ref());
 
     /*// High pass
     let source = image;
@@ -89,8 +89,10 @@ use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, c
                             / (foreground_count as u48*background_count as u48) as u128;
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u16, variance); }
     }
+    let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFFFF } else { 0 }));
+    return Err(binary);
 
-    fn distance(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u32]>> {
+    /*fn distance(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u32]>> {
         let size = image.size;
         let mut G = Image::uninitialized(size);
         for x in 0..size.x {
@@ -184,7 +186,7 @@ use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, c
     //return ([vec2::from(image.size/2); 4], (binary, points));
 
     const N : usize = 4*5+3*4;
-    if points[0].len() < N { return None; } //return ([vec2::from(image.size/2); 4], (binary, points)); }
+    if points[0].len() < N { return Err(binary); }
 
     let points = &mut points[0];
     let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
@@ -211,6 +213,5 @@ use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, c
 
     // First edge is long edge
     if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
-    Some(Q.try_into().unwrap())
-    //(Q.try_into().unwrap(), high_pass)
+    Ok(Q.try_into().unwrap())*/
 }
