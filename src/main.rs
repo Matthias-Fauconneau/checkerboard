@@ -1,12 +1,12 @@
 #![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit)]#![allow(non_camel_case_types,non_snake_case)]
-use {vector::{xy, size}, ::image::Image};
-//mod checkerboard; use checkerboard::*;
+use {vector::{xy, size, int2}, ::image::{Image, bgr8}};
+mod checkerboard; use checkerboard::*;
 //mod matrix; use matrix::*;
 mod image; use image::*;
 
 fn main() {
     let mut cameras = cameleon::u3v::enumerate_cameras().unwrap();
-    for camera in &cameras { println!("{:?}", camera.info()); }
+    //for camera in &cameras { println!("{:?}", camera.info()); }
     let ref mut camera = cameras[0]; // find(|c| c.info().contains("U3-368xXLE-NIR")).unwrap()
     camera.open().unwrap();
     camera.load_context().unwrap();          
@@ -14,22 +14,9 @@ fn main() {
     let acquisition_frame_rate = params_ctxt.node("AcquisitionFrameRate").unwrap().as_float(&params_ctxt).unwrap(); // 30fps
 	let max = acquisition_frame_rate.max(&mut params_ctxt).unwrap();
     acquisition_frame_rate.set_value(&mut params_ctxt, max).unwrap(); // 28us
-    //println!("{}", acquisition_frame_rate.value(&mut params_ctxt).unwrap());
-    
     let exposure_time = params_ctxt.node("ExposureTime").unwrap().as_float(&params_ctxt).unwrap();
 	exposure_time.set_value(&mut params_ctxt, 1000.).unwrap(); // 15ms=66Hz
-    
-    /*let gain_node = params_ctxt.node("Gain").unwrap().as_float(&params_ctxt).unwrap();
-	if gain_node.is_writable(&mut params_ctxt).unwrap() { gain_node.set_value(&mut params_ctxt, 0.1_f64).unwrap(); }*/
-	
     let nir = camera.start_streaming(3).unwrap();
- 
-    /*fn decode(path: impl AsRef<std::path::Path>) -> Image<Box<[u8]>> {
-        let image = imagers::open(path).unwrap();
-        Image::new(vector::xy{x: image.width(), y: image.height()}, image.into_bytes().into_boxed_slice())
-    }
-    let ir = decode("ir.png");*/
-
     struct View {
         nir: cameleon::payload::PayloadReceiver,
     }
@@ -37,16 +24,24 @@ fn main() {
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
         #[ui::throws(ui::Error)] fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) { 
             let payload = self.nir.recv_blocking().unwrap();
-            //let Ok(payload) = self.camera.recv_blocking() else { return Ok(()) };
-            //println!("blocking"); let Ok(payload) = payload_rx.recv_blocking() else { println!("continue"); continue; }; println!("ok");
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
             let nir = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
             //let nir = Image::new(xy{x: width as u32, y: height as u32}, neg(payload.image().unwrap()));
-            //let (checkerboard, debug) = checkerboard(nir.as_ref());
+            let (_checkerboard, (binary, debug)) = checkerboard(nir.as_ref());
+            //copy(target, nir.as_ref());
+            copy(target, binary.as_ref());
+            for (i, points) in debug.into_iter().map(|debug| debug.1).enumerate() {
+                for (p,_) in points { 
+                    let mut plot = |x,y| {
+                        let Some(p) = (int2::from(p)+xy{x,y}).try_unsigned() else { return; };
+                        if let (Some(target), Some(source)) = (target.get_mut(p), Image::get(&nir, p)) { *target = if i>0 { ui::color::red.into() } else { ui::color::blue.into() }; }
+                    };
+                    for y in -16..16 { plot(0, y); }
+                    for x in -16..16 { plot(x, 0); }
+                }
+            }
             //println!("{checkerboard:?}");
             //for &p in &checkerboard { for y in -16..16 { for x in -16..16 { if let Some(p) = debug.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = if *p < 0x80 { 0xFF } else { 0 }; } }}}
-            //downscale(target, debug.as_ref());
-            copy(target, nir.as_ref());
             
             /*let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
             let M = P.map(|P| {
