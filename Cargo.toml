@@ -9,11 +9,3 @@ image={git='https://github.com/Matthias-Fauconneau/image'}
 cameleon={version='*', features=['libusb']}
 uvc={package='uvc-sys', version='*'}
 ui={git='https://github.com/Matthias-Fauconneau/ui', default-features=false, features=['text','softbuffer']}
-[patch.'https://github.com/Matthias-Fauconneau/num']
-num={path='../num'}
-[patch.'https://github.com/Matthias-Fauconneau/vector']
-vector={path='../vector'}
-[patch.'https://github.com/Matthias-Fauconneau/image']
-image={path='../image'}
-[patch.'https://github.com/Matthias-Fauconneau/ui']
-ui={path='../ui'}
