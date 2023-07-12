@@ -160,7 +160,7 @@ pub fn checkerboard(image: Image<&[u16]>, toggle: bool) -> Result {
         for i in 0..4 {
             points[i%2] = points[i%2].iter().filter(|a| points[[1,0][i%2]].iter().any(|b| vector::sq(a.0-b.0) < 6. * a.1 as f32)).copied().collect();
         }
-        println!("{} {}", points[0].len(), points[1].len(), points.);
+        println!("{} {}", points[0].len(), points[1].len());
     }
     //println!("{}", points[1].len());
     
