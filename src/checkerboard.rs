@@ -1,5 +1,10 @@
-use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Image};
-#[allow(dead_code)] pub fn checkerboard(image: Image<&[u16]>) -> std::result::Result<[vec2; 4], Image<Box<[u16]>>> {
+use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Image};
+#[allow(dead_code)] pub enum Result {
+    Checkerboard([vec2; 4]),
+    Image(Image<Box<[u16]>>),
+    Points([Vec<(vec2, u16)>; 2], Image<Box<[u16]>>),
+}
+pub fn checkerboard(image: Image<&[u16]>, toggle: bool) -> Result {
     fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
         let mut transpose = Image::uninitialized(source.size.yx());
         /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
@@ -28,9 +33,9 @@ use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, c
 
     // High pass
     let source = image;
-    let mut low_then_high = transpose_low_pass_1D::<8>(transpose_low_pass_1D::<8>(source.as_ref()).as_ref());
+    let mut low_then_high = transpose_low_pass_1D::<32>(transpose_low_pass_1D::<32>(source.as_ref()).as_ref());
     low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(p as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
-    //return Err(low_then_high);
+    //return Result::Image(low_then_high);
     let high_pass = low_then_high;
     let image = high_pass.as_ref();
 
@@ -56,7 +61,7 @@ use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, c
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u16, variance); }
     }
     let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFFFF } else { 0 }));
-    //return Err(binary);
+    //return Result::Image(binary);
 
     fn distance<T: TryFrom<u32>>(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[T]>> where T::Error: std::fmt::Debug {
         let size = image.size;
@@ -103,55 +108,70 @@ use {/*std::cmp::{min,max},*/ num::{sq, zero}, vector::{xy, uint2, int2, vec2, c
         distance
     }
 
-    let distance = distance(image.as_ref(), threshold, true);
-    //return Err(distance)
+    let mut points = [false,true].map(|inverse| { 
+        let distance = distance(image.as_ref(), threshold, inverse);
+        //return Result::Image(distance)
 
-    let max = {
-        const R : u32 = 2;
-        let mut target = Image::zero(distance.size);
-        for y in R..distance.size.y-R { for x in R..distance.size.x-R {
-            let center = distance[xy{x, y}];
-            if center < 4*4/*64*64*/ { continue; }
+        let max = {
+            const R : u32 = 2;
+            let mut target = Image::zero(distance.size);
+            for y in R..distance.size.y-R { for x in R..distance.size.x-R {
+                let center = distance[xy{x, y}];
+                if center < 4*4/*64*64*/ { continue; }
+                let mut flat = 0;
+                if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+                    if (dx,dy) == (0,0) { continue; }
+                    if distance[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] > center { return false; }
+                    if distance[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] == center { flat += 1; }
+                }} true})() { if flat < 12 { target[xy{x,y}] = center; } }
+            }}
+            target
+        };
+        //return Result::Image(max);
+
+        let mut max = max;
+        let mut points = Vec::new();
+        {const R : u32 = 8/*64*/; // Merges close peaks (top left first)
+        for y in R..max.size.y-R { for x in R..max.size.x-R {
+            let value = max[xy{x,y}];
+            if value == 0 { continue; }
             let mut flat = 0;
-            if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-                if (dx,dy) == (0,0) { continue; }
-                if distance[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] > center { return false; }
-                if distance[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] == center { flat += 1; }
-            }} true})() { if flat < 12 { target[xy{x,y}] = center; } }
-        }}
-        target
-    };
-    return Err(max);
+            let mut sum : uint2 = zero();
+            for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+                let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
+                if max[p] == 0 { continue; }
+                flat += 1;
+                sum += p;
+            }}
+            points.push( (vec2::from(int2::from(xy{x,y}+sum))/((1+flat) as f32), value) );
+            for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+                let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
+                max[p] = 0; // Merge small flat plateaus as single point
+            }}
+        }}}
+        points
+    });
 
-    /*let mut max = max;
-    let mut points = Vec::new();
-    {const R : u32 = 0/*16*//*64*/; // Merges close peaks (top left first)
-    for y in R..max.size.y-R { for x in R..max.size.x-R {
-        let value = max[xy{x,y}];
-        if value == 0 { continue; }
-        let mut flat = 0;
-        let mut sum : uint2 = zero();
-        for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-            let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
-            if max[p] == 0 { continue; }
-            flat += 1;
-            sum += p;
-        }}
-        points.push( (vec2::from(int2::from(xy{x,y}+sum))/((1+flat) as f32), value) );
-        for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-            let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
-            max[p] = 0; // Merge small flat plateaus as single point
-        }}
-    }}}*/
-    //return Err(max);
+    /*let points : [Vec<_>; _] = {let [a,b]=points.each_ref(); [[a,b],[b,a]]}.map(|[a,b]| {
+        a.into_iter().filter(|a| b.iter().any(|b| true/*vector::sq(a.0-b.0) < 3. * a.1 as f32*/)).copied().collect()
+    });*/
+    //println!("{}", points[1].len());
+    if toggle { 
+        for i in 0..4 {
+            points[i%2] = points[i%2].iter().filter(|a| points[[1,0][i%2]].iter().any(|b| vector::sq(a.0-b.0) < 6. * a.1 as f32)).copied().collect();
+        }
+        println!("{} {}", points[0].len(), points[1].len(), points.);
+    }
+    //println!("{}", points[1].len());
+    
+    const N : usize = 4*5+3*4;
+    //let [_, mut points] = points;
+    if points.len() < N { return Result::Points(points, high_pass); }
+    return Result::Points(points, high_pass); 
 
-    /*const N : usize = 4*5+3*4;
-    if points[0].len() < N { return Err(binary); }
-
-    let points = &mut points[0];
-    let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
-    //return ([vec2::from(image.size/2); 4], (binary, [points.to_vec()]));
-    let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
+    //let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
+    //return Result::Points(points.iter().copied().collect(), high_pass);
+    /*let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
     let mut Q = vec![];
     loop {
         Q.push(p0);

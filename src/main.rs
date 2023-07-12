@@ -1,4 +1,4 @@
-#![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit)]#![allow(non_camel_case_types,non_snake_case,unused_imports)]
+#![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit,generic_arg_infer)]#![allow(non_camel_case_types,non_snake_case,unused_imports)]
 use {vector::{xy, size, int2}, ::image::{Image,bgr8}};
 mod checkerboard; use checkerboard::*;
 //mod matrix; use matrix::*;
@@ -57,6 +57,7 @@ fn main() {
         ir: Option<IR>,
         last_frame: Option<Image<Box<[u16]>>>,
         last_key: char,
+        toggle: bool,
     }
     impl ui::Widget for View { 
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
@@ -82,14 +83,25 @@ fn main() {
             });
             //let ir = Image::new(xy{x: frame.width as u32, y: frame.height as u32}, unsafe{std::slice::from_raw_parts(frame.data as *const u16, (frame.data_bytes/2) as usize)};  
             
-            match self.last_key {
+            /*match self.last_key {
                 'b' => {
                     let binary = checkerboard(ir.as_ref()).unwrap_err();
                     upscale(target, binary.as_ref());
                 }
                 'o'|_ => upscale(target, ir.as_ref()),
-            }
+            }*/
             //copy(target, nir.as_ref());          
+
+            let checkerboard::Result::Points(points, distance) = checkerboard(ir.as_ref(), self.toggle) else { unimplemented!() };
+            let (factor, offset) = upscale(target, distance.as_ref());
+            for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { 
+                let mut plot = |x,y| {
+                    let Some(p) = (int2::from(factor as f32*p)+xy{x,y}).try_unsigned() else {return};
+                    if let Some(p) = target.get_mut(offset+p) { *p = color; }
+                };
+                for y in -16..16 { plot(0, y); }
+                for x in -16..16 { plot(x, 0); }
+            }}
 
             /*if let Some(checkerboard) = checkerboard(nir.as_ref()) {
                 //println!("{checkerboard:?}");
@@ -128,13 +140,14 @@ fn main() {
             //self.nir.send_back(payload);
         }
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {
-            if let ui::Event::Key(' ') = event { 
+            if let ui::Event::Key('s') = event { 
                 if self.ir.is_some() { std::fs::write("ir", &bytemuck::cast_slice(self.last_frame.as_ref().unwrap())).unwrap(); }
                 else { self.ir = Some(IR()); }
             }
+            if let &ui::Event::Key(' ') = event { self.toggle = !self.toggle; return Ok(true); }
             if let &ui::Event::Key(key) = event { self.last_key = key; return Ok(true); }
             Ok(self.nir.is_some()||self.ir.is_some()) 
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: None, last_key: 'o'}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: None, last_key: '\0', toggle: false}).unwrap();
 }
