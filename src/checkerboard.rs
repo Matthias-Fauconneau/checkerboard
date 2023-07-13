@@ -4,7 +4,7 @@ use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Imag
     Image(Image<Box<[u16]>>),
     Points([Vec<(vec2, u16)>; 2], Image<Box<[u16]>>),
 }
-pub fn checkerboard(image: Image<&[u16]>, toggle: bool) -> Result {
+#[allow(dead_code)] pub fn checkerboard(image: Image<&[u16]>, toggle: bool) -> Result {
     fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
         let mut transpose = Image::uninitialized(source.size.yx());
         /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
@@ -60,7 +60,7 @@ pub fn checkerboard(image: Image<&[u16]>, toggle: bool) -> Result {
                             / (foreground_count as u48*background_count as u48) as u128;
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u16, variance); }
     }
-    let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFFFF } else { 0 }));
+    #[allow(unused_variables)] let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFFFF } else { 0 }));
     //return Result::Image(binary);
 
     fn distance<T: TryFrom<u32>>(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[T]>> where T::Error: std::fmt::Debug {
@@ -92,7 +92,7 @@ pub fn checkerboard(image: Image<&[u16]>, toggle: bool) -> Result {
                 else {
                     let Sep = |i,u| (sq(u as u32) - sq(i as u32) + sq(g(u) as u32) - sq(g(i) as u32)) / (2*(u as i16 - i as i16) as u32);
                     let w = 1 + Sep(S[q as usize], u);
-                    if w < size.x { 
+                    if w < size.x {
                         q = q + 1;
                         S[q as usize] = u;
                         T[q as usize] = w as u16;
@@ -108,7 +108,7 @@ pub fn checkerboard(image: Image<&[u16]>, toggle: bool) -> Result {
         distance
     }
 
-    let mut points = [false,true].map(|inverse| { 
+    let mut points = [false,true].map(|inverse| {
         let distance = distance(image.as_ref(), threshold, inverse);
         //return Result::Image(distance)
 
@@ -156,18 +156,18 @@ pub fn checkerboard(image: Image<&[u16]>, toggle: bool) -> Result {
         a.into_iter().filter(|a| b.iter().any(|b| true/*vector::sq(a.0-b.0) < 3. * a.1 as f32*/)).copied().collect()
     });*/
     //println!("{}", points[1].len());
-    if toggle { 
+    if toggle {
         for i in 0..4 {
             points[i%2] = points[i%2].iter().filter(|a| points[[1,0][i%2]].iter().any(|b| vector::sq(a.0-b.0) < 6. * a.1 as f32)).copied().collect();
         }
         println!("{} {}", points[0].len(), points[1].len());
     }
     //println!("{}", points[1].len());
-    
+
     const N : usize = 4*5+3*4;
     //let [_, mut points] = points;
     if points.len() < N { return Result::Points(points, high_pass); }
-    return Result::Points(points, high_pass); 
+    return Result::Points(points, high_pass);
 
     //let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
     //return Result::Points(points.iter().copied().collect(), high_pass);

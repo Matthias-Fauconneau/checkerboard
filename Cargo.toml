@@ -1,11 +1,16 @@
 package={name='checkerboard',version='0.0.0',edition='2021'}
 [dependencies]
 bytemuck='*'
-fehler='*'
+#fehler='*'
 num={git='https://github.com/Matthias-Fauconneau/num'}
 vector={git='https://github.com/Matthias-Fauconneau/vector',features=['unstable']}#norm
-nalgebra='*'
-image={git='https://github.com/Matthias-Fauconneau/image'}
-cameleon={version='*', features=['libusb']}
-uvc={package='uvc-sys', version='*'}
-ui={git='https://github.com/Matthias-Fauconneau/ui', default-features=false, features=['text','softbuffer']}
+nalgebra={version='*', optional=true}
+image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit']}
+cameleon={version='*', features=['libusb'], optional=true}
+uvc={package='uvc-sys', version='*', optional=true}
+ui={git='https://github.com/Matthias-Fauconneau/ui'}#, features=['softbuffer']}
+[patch.'https://github.com/Matthias-Fauconneau/ui']
+ui={path='../ui'}
+#[patch.crates-io]
+#derive_more={git='https://github.com/JelteF/derive_more'} # Avoid syn1 dep dup syn2
+#rustix={version='*', features=['use-libc']} # Currently broken without

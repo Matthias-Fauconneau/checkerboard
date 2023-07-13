@@ -9,7 +9,7 @@ use {vector::{xy, uint2}, image::Image};
     }
 }
 
-pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (u32, uint2) {
+#[allow(dead_code)] pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (u32, uint2) {
     let [min, max] = [*source.iter().min().unwrap(), *source.iter().max().unwrap()];
     let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
     let target_size = source.size*(num/den); // largest integer fit
