@@ -15,9 +15,9 @@ use {vector::{xy, uint2}, image::Image};
     let target_size = source.size*(num/den); // largest integer fit
     let offset = (target.size-target_size)/2;
     let mut target = target.slice_mut(offset, target_size);
-    let factor = target.size.x/source.size.x;
-    assert!(factor >= 1);
-    let stride_factor = target.stride*factor;
+    let scale = target.size.x/source.size.x;
+    assert!(scale >= 1);
+    let stride_factor = target.stride*scale;
     let mut row = target.as_mut_ptr();
     if min < max { for y in 0..source.size.y {
         {
@@ -28,14 +28,14 @@ use {vector::{xy, uint2}, image::Image};
                 let p4 = [p; 4];
                 {
                     let mut row = row;
-                    for _ in 0..factor { unsafe{
+                    for _ in 0..scale { unsafe{
                         {
                             let mut row = row;
-                            for _ in 0..factor/4 {
+                            for _ in 0..scale/4 {
                                 (row as *mut [u32; 4]).write_unaligned(p4);
                                 row = row.add(4);
                             }
-                            for _ in factor/4*4..factor {
+                            for _ in scale/4*4..scale {
                                 *row = p;
                                 row = row.add(1);
                             }
@@ -43,12 +43,12 @@ use {vector::{xy, uint2}, image::Image};
                         row = row.add(target.stride as usize);
                     }}
                 }
-                row = unsafe{row.add(factor as usize)};
+                row = unsafe{row.add(scale as usize)};
             }
         }
         row = unsafe{row.add(stride_factor as usize)};
     }}
-    (factor, offset)
+    (scale, offset)
 }
 
 /*use {vector::{xy, uint2}, crate::matrix::{mat3, apply}};

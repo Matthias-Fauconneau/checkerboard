@@ -115,16 +115,25 @@ fn main() {
             }*/
             //copy(target, nir.as_ref());
 
-            let checkerboard::Result::Points(points, distance) = checkerboard(ir.as_ref(), self.toggle) else { unimplemented!() };
-            let (factor, offset) = upscale(target, distance.as_ref());
-            for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points {
-                let mut plot = |x,y| {
-                    let Some(p) = (int2::from(factor as f32*p)+xy{x,y}).try_unsigned() else {return};
+            let mut cross = |target:&mut Image<&mut[u32]>, scale, offset, p, color| {
+                let mut plot = |dx,dy| {
+                    let Some(p) = (int2::from(scale as f32*p)+xy{x: dx, y: dy}).try_unsigned() else {return};
                     if let Some(p) = target.get_mut(offset+p) { *p = color; }
                 };
-                for y in -16..16 { plot(0, y); }
-                for x in -16..16 { plot(x, 0); }
-            }}
+                for dy in -16..16 { plot(0, dy); }
+                for dx in -16..16 { plot(dx, 0); }
+            };
+            match checkerboard(ir.as_ref(), self.toggle) {
+                checkerboard::Result::Image(image) => { upscale(target, image.as_ref()); }
+                checkerboard::Result::Points(points, image) => {
+                    let (scale, offset) = upscale(target, image.as_ref());
+                    for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
+                }
+                checkerboard::Result::Checkerboard(points) => {
+                    let (scale, offset) = upscale(target, ir.as_ref());
+                    for p in points { cross(target, scale, offset, p, 0); }
+                }
+            }
 
             /*if let Some(checkerboard) = checkerboard(nir.as_ref()) {
                 //println!("{checkerboard:?}");

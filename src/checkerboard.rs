@@ -1,4 +1,4 @@
-use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Image};
+use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax}, image::Image};
 #[allow(dead_code)] pub enum Result {
     Checkerboard([vec2; 4]),
     Image(Image<Box<[u16]>>),
@@ -152,26 +152,25 @@ use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Imag
         points
     });
 
-    /*let points : [Vec<_>; _] = {let [a,b]=points.each_ref(); [[a,b],[b,a]]}.map(|[a,b]| {
-        a.into_iter().filter(|a| b.iter().any(|b| true/*vector::sq(a.0-b.0) < 3. * a.1 as f32*/)).copied().collect()
-    });*/
-    //println!("{}", points[1].len());
-    if toggle {
-        for i in 0..4 {
-            points[i%2] = points[i%2].iter().filter(|a| points[[1,0][i%2]].iter().any(|b| vector::sq(a.0-b.0) < 6. * a.1 as f32)).copied().collect();
-        }
-        println!("{} {}", points[0].len(), points[1].len());
+    loop {
+        let isolation = [0,1].map(|i| minmax(points[i%2].iter().map(|a| points[[1,0][i%2]].iter().map(|b| vector::sq(a.0-b.0)).min_by(f32::total_cmp).unwrap())).unwrap());
+        let (i, isolation) = isolation.into_iter().enumerate().max_by(|(_, a), (_, b)| a.max.total_cmp(&b.max)).unwrap();
+        if isolation.max < 5./4.*isolation.min { break; }
+        let before = points.each_ref().map(Vec::len);
+        points[i%2] = points[i%2].iter().filter(|a| points[[1,0][i%2]].iter().any(|b| vector::sq(a.0-b.0) < isolation.max/*6. * a.1 as f32*/)).copied().collect();
+        if points.each_ref().map(Vec::len) != before { continue; } else { break; }
     }
-    //println!("{}", points[1].len());
 
-    const N : usize = 4*5+3*4;
-    //let [_, mut points] = points;
-    if points.len() < N { return Result::Points(points, high_pass); }
-    return Result::Points(points, high_pass);
+    const N : usize = 4*5;//+3*4;
+    println!("{} {}", points[1].len(), N);
+    if points[1].len() < N { return Result::Points(points, high_pass); }
+    if toggle { return Result::Points(points, high_pass); }
 
-    //let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
-    //return Result::Points(points.iter().copied().collect(), high_pass);
-    /*let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
+    let [_, mut points] = points; //  IR "white" = Visible black
+    let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
+    //return Result::Points([Vec::new(), points.iter().copied().collect()], high_pass);
+
+    let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
     let mut Q = vec![];
     loop {
         Q.push(p0);
@@ -193,5 +192,5 @@ use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm}, image::Imag
 
     // First edge is long edge
     if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
-    Ok(Q.try_into().unwrap())*/
+    Result::Checkerboard(Q.try_into().unwrap())
 }
