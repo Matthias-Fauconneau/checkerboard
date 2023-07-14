@@ -125,13 +125,16 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (u32,
     (scale, offset)
 }
 
-/*use {vector::{xy, uint2}, crate::matrix::{mat3, apply}};
-pub fn affine_blit(target: &mut Image<&mut[u8]>, source: Image<&[u8]>, A: mat3) {
+use image::bgr8;
+
+use crate::matrix::{mat3, apply};
+pub fn affine_blit(target: &mut Image<&mut[u32]>, source: Image<&[u16]>, A: mat3) {
+    let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
     let size = target.size;
     for y in 0..size.y { for x in 0..size.x {
         let p = xy{x: x as f32, y: y as f32};
         let p = apply(A, p);
         if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
-        target[xy{x, y}] = source[uint2::from(p)];
+        target[xy{x, y}] = bgr8::from(((source[uint2::from(p)]-min) as u32*0xFF/(max-min) as u32) as u8).into();
     }}
-}*/
+}

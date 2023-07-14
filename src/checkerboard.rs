@@ -1,10 +1,10 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image};
-#[allow(dead_code)] pub enum Result {
+pub enum Result {
     Checkerboard([vec2; 4]),
     Image(Image<Box<[u16]>>),
     Points([Vec<(vec2, u32)>; 2], Image<Box<[u16]>>),
 }
-#[allow(dead_code)] pub fn checkerboard(image: Image<&[u16]>, black: bool, toggle: bool) -> Result {
+pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: bool) -> Result {
     fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
         let mut transpose = Image::uninitialized(source.size.yx());
         /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
@@ -176,7 +176,6 @@ use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinM
         if isolation.max < 5./4.*isolation.min { break; }
         let before = points[i%2].len(); //points.each_ref().map(Vec::len);
         points[i%2] = points[i%2].iter().filter(|a| points[[1,0][i%2]].iter().any(|b| vector::sq(a.0-b.0) < isolation.max/*6. * a.1 as f32*/)).copied().collect();
-        println!("{} {}", i, points[i%2].len());
         //assert_ne!(before, points.each_ref().map(Vec::len));
         assert_ne!(before, points[i%2].len());
         if i==black && points[black].len() == N { break; }
@@ -184,7 +183,6 @@ use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinM
         //if points.each_ref().map(Vec::len) != before { assert!(points[i%2].len() == before[i%2]-1); continue; } else { break; }
     }
 
-    println!("{} {}", points[black].len(), N);
     if points[black].len() < N { return Result::Points(points, high_pass); }
     //if toggle { return Result::Points(points, high_pass); }
     //return Result::Points(points, high_pass);

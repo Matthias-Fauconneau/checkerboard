@@ -1,9 +1,11 @@
 package={name='checkerboard',version='0.0.0',edition='2021'}
+[features]
+default=['dep:nalgebra']
 [dependencies]
 bytemuck='*'
 num={git='https://github.com/Matthias-Fauconneau/num'}
 vector={git='https://github.com/Matthias-Fauconneau/vector',features=['unstable']}#norm
-nalgebra={version='*', optional=true}
+nalgebra={version='*', optional=true, default-features=false, features=['std']}
 image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit']}
 cameleon={version='*', features=['libusb'], optional=true}
 uvc={package='uvc-sys', version='*', optional=true}

@@ -4,7 +4,7 @@ pub fn transpose<T: Copy, const M: usize, const N:usize>(a: [[T; N]; M]) -> [[T;
 #[allow(non_camel_case_types)] type Matrix<const M: usize, const N:usize> = [[f32; N]; M];
 #[allow(non_camel_case_types)] pub type mat3 = Matrix<3,3>;
 
-pub fn identity<const M: usize, const N:usize>() -> [[f32; M]; N] { eval(|i| eval(|j| if i==j {1.} else {0.})) }
+//pub fn identity<const M: usize, const N:usize>() -> [[f32; M]; N] { eval(|i| eval(|j| if i==j {1.} else {0.})) }
 pub fn mul<const M: usize, const N:usize, const P:usize>(a: Matrix<M,N>, b: Matrix<N,P>) -> Matrix<M,P> { eval(|i| eval(|j| (0..N).map(|k| a[i][k]*b[k][j]).sum())) }
 
 use vector::vec2;

@@ -2,7 +2,7 @@
 #![allow(non_camel_case_types,non_snake_case,unused_imports)]
 use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}};
 mod checkerboard; use checkerboard::*;
-//mod matrix; use matrix::*;
+mod matrix; use matrix::*;
 mod image; use image::*;
 
 fn main() {
@@ -30,7 +30,9 @@ fn main() {
         fn next(&mut self) -> Image<Box<[u16]>> {
             let payload = self.nir.recv_blocking().unwrap();
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
-            Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
+            let image = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
+            self.send_back(payload);
+            image
         }
     }
 
@@ -112,16 +114,6 @@ fn main() {
                 }
                 Image::new(xy{x:256,y:192}, cast_slice_box(std::fs::read("ir").unwrap().into_boxed_slice()))
             });
-            //let ir = Image::new(xy{x: frame.width as u32, y: frame.height as u32}, unsafe{std::slice::from_raw_parts(frame.data as *const u16, (frame.data_bytes/2) as usize)};
-
-            /*match self.last_key {
-                'b' => {
-                    let binary = checkerboard(ir.as_ref()).unwrap_err();
-                    upscale(target, binary.as_ref());
-                }
-                'o'|_ => upscale(target, ir.as_ref()),
-            }*/
-            //copy(target, nir.as_ref());
 
             fn scale(target: &mut Image<&mut[u32]>, image: Image<&[u16]>) -> (f32, uint2) {
                 if image.size <= target.size { let (scale, offset) = upscale(target, image); (scale as f32, offset) }
@@ -135,28 +127,36 @@ fn main() {
                 for dy in -16..16 { plot(0, dy); }
                 for dx in -16..16 { plot(dx, 0); }
             }
-            //scale(target, nir.as_ref());
-            match checkerboard(nir.as_ref(), true, self.toggle) {
-                checkerboard::Result::Image(image) => { scale(target, image.as_ref()); }
+
+            let P_nir = match checkerboard(nir.as_ref(), true, self.toggle) {
+                checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 checkerboard::Result::Points(points, image) => {
                     let (scale, offset) = scale(target, image.as_ref());
                     for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
+                    return Ok(());
                 }
                 checkerboard::Result::Checkerboard(points) => {
-                    let (scale, offset) = scale(target, nir.as_ref());
-                    for p in points { cross(target, scale, offset, p, u32::MAX); }
+                    points
+                    /*let (scale, offset) = scale(target, nir.as_ref());
+                    for p in points { cross(target, scale, offset, p, u32::MAX); }*/
                 }
-            }
+            };
 
-            /*if let Some(checkerboard) = checkerboard(nir.as_ref()) {
-                //println!("{checkerboard:?}");
-                for &p in &checkerboard {
-                    let mut plot = |x,y| if let Some(p) = target.get_mut((int2::from(p)+xy{x,y}).unsigned()) { *p = bgr8::from(0xFFu8).into(); };
-                    for y in -16..16 { plot(0, y); }
-                    for x in -16..16 { plot(x, 0); }
+            let P_ir = match checkerboard(ir.as_ref(), false, self.toggle) {
+                checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
+                checkerboard::Result::Points(points, image) => {
+                    let (scale, offset) = scale(target, image.as_ref());
+                    for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
+                    return Ok(());
                 }
-            }*/
-            /*let mut P = checkerboards; P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
+                checkerboard::Result::Checkerboard(points) => {
+                    /*let (scale, offset) = scale(target, ir.as_ref());
+                    for p in points { cross(target, scale, offset, p, 0); }*/
+                    points
+                }
+            };
+
+            let P = [P_nir, P_ir]; //P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
             let M = P.map(|P| {
                 let center = P.into_iter().sum::<vec2>() / P.len() as f32;
                 let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();
@@ -164,25 +164,20 @@ fn main() {
             });
             let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
             let A = mul(inverse(M[1]), mul(A, M[0]));
-            fn collect<I:Iterator, const N: usize>(mut iter: I) -> [I::Item; N] { let array = [(); N].map(|_| iter.next().unwrap()); assert!(iter.next().is_none()); array }
-            let images : [_; 2] = collect(images.iter().zip([(identity(), P[0]), (A, P[1].map(|p| apply(inverse(A), p)))]).map(|(image, (A, P))| {
-                let mut target = Image::zero(image.size);
-                affine_blit(&mut target.as_mut(), image.as_ref(), A);
-                let image = target;
 
-                let max = *image.iter().max().unwrap();
-                let mut target = image;
-                //target.as_mut().map(|&v| (v as u16 * 0xFF / max as u16) as u8);
-                Image::map(&mut target.as_mut(), |&v| (v as u16 * 0xFF / max as u16) as u8);
+            let ref source = nir;
+            let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
+            let target_size = source.size*num/den;
+            assert!(target_size <= target.size);
+            let offset = (target.size-target_size)/2;
+            let mut target = target.slice_mut(offset, target_size);
+            let scale = target.size.x as f32/source.size.x as f32;
 
-                for &p in &P {
-                    use vector::{uint2, xy};
-                    target[uint2::from(/*p.0.round()*/xy{x: p.x.round() as f32, y: p.y.round() as f32})] = 0xFF;
-                }
-                target
-            }));*/
-
-            //self.nir.send_back(payload);
+            affine_blit(&mut target, nir.as_ref(), A);
+            for p in P[1].map(|p| apply(inverse(A), p)) {
+                use vector::{uint2, xy};
+                cross(&mut target, scale, offset, p, 0);
+            }
             Ok(())
         }
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {
