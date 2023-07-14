@@ -89,12 +89,11 @@ fn main() {
         nir: Option<NIR>,
         ir: Option<IR>,
         last_frame: [Option<Image<Box<[u16]>>>; 2],
-        last_key: char,
         toggle: bool,
     }
     impl ui::Widget for View {
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
-        fn paint(&mut self, mut target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
+        fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
             let nir = self.nir.as_mut().map(|nir| {
                 let nir = nir.next();
                 self.last_frame[0] = Some(nir.clone());
@@ -115,7 +114,6 @@ fn main() {
                 Image::new(xy{x:256,y:192}, cast_slice_box(std::fs::read("ir").unwrap().into_boxed_slice()))
             });
 
-
             fn cross(target:&mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, color:u32) {
                 let mut plot = |dx,dy| {
                     let Some(p) = (int2::from(scale*p)+xy{x: dx, y: dy}).try_unsigned() else {return};
@@ -132,11 +130,7 @@ fn main() {
                     for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
                     return Ok(());
                 }
-                checkerboard::Result::Checkerboard(points) => {
-                    points
-                    /*let (scale, offset) = scale(target, nir.as_ref());
-                    for p in points { cross(target, scale, offset, p, u32::MAX); }*/
-                }
+                checkerboard::Result::Checkerboard(points) => points,
             };
 
             let P_ir = match checkerboard(ir.as_ref(), false, self.toggle) {
@@ -146,11 +140,7 @@ fn main() {
                     for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
                     return Ok(());
                 }
-                checkerboard::Result::Checkerboard(points) => {
-                    /*let (scale, offset) = scale(target, ir.as_ref());
-                    for p in points { cross(target, scale, offset, p, 0); }*/
-                    points
-                }
+                checkerboard::Result::Checkerboard(points) => points,
             };
 
             let P = [P_nir, P_ir]; //P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
@@ -162,32 +152,30 @@ fn main() {
             let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
             let A = mul(inverse(M[1]), mul(A, M[0]));
 
-            let (target_size, scale, offset) = scale(target, nir.as_ref());
-            if self.toggle {
-                if true {
-                    //let ref source = nir;
-                    /*//let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
-                    let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
-                    let target_size = source.size/((den+num-1)/num); // largest integer downscale*/
-                    affine_blit(target, target_size, ir.as_ref(), A, nir.size);
-                } else {
-                    let (_, scale, offset) = image::scale(target, ir.as_ref());
-                    for p in P[1] { cross(&mut target, scale, offset, p, u32::MAX); }
-                }
-            }
-            for p in P[1].map(|p| apply(inverse(A), p)) { cross(&mut target, scale, offset, p, u32::MAX); }
+            let (target_size, _, _) = scale(target, nir.as_ref());
+            affine_blit(target, target_size, ir.as_ref(), A, nir.size);
             Ok(())
         }
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {
-            if let ui::Event::Key('s') = event {
-                if self.last_frame.iter_mut().zip(["nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| std::fs::write(name, &bytemuck::cast_slice(image)).unwrap()).count() == 0 {
-                    self.ir = Some(IR::new());
-                }
+            use ui::Event::Key;
+            match event {
+                Key('s') => {
+                    if self.last_frame.iter_mut().zip(["nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| std::fs::write(name, &bytemuck::cast_slice(image)).unwrap()).count() == 0 {
+                        self.ir = Some(IR::new());
+                    }
+                },
+                //Key(' ') =>{ self.toggle = !self.toggle; return Ok(true); }
+                Key('⎙')|Key(' ') => {
+                    println!("⎙");
+                    let mut target = Image::uninitialized(xy{x: 2592, y:1944});
+                    let size = target.size;
+                    self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap();
+                    png::save_buffer("checkerboard.png", bytemuck::cast_slice(&target.data), target.size.x, target.size.y, png::ColorType::Rgba8).unwrap();
+                },
+                _ => {},
             }
-            if let &ui::Event::Key(' ') = event { self.toggle = !self.toggle; return Ok(true); }
-            if let &ui::Event::Key(key) = event { self.last_key = key; return Ok(true); }
             Ok(self.nir.is_some()||self.ir.is_some())
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], last_key: '\0', toggle: false}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], toggle: false}).unwrap();
 }

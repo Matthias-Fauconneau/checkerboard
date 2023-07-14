@@ -26,7 +26,7 @@ pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (uint2,
             let mut row = row;
             for x in 0..source.size.x {
                 let value = ((source[vector::xy{x,y}]-min) as u32 * 0xFF/(max-min) as u32) as u8;
-                let p = value as u32 | (value as u32)<<8 | (value as u32)<<16;
+                let p = value as u32 | (value as u32)<<8 | (value as u32)<<16 | (0xFF<<24);
                 let p4 = [p; 4];
                 {
                     let mut row = row;
@@ -143,7 +143,9 @@ pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image
         let p = scale*xy{x: x as f32, y: y as f32};
         let p = apply(A, p);
         if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
-        target[xy{x, y}] = bgr8::from(((source[uint2::from(p)]-min) as u32*0xFF/(max-min) as u32) as u8).into();
+        let s = source[uint2::from(p)];
+        let p = &mut target[xy{x, y}];
+        *p = {let mut p = bgr8::from(*p); p.b = ((s-min) as u32*0xFF/(max-min) as u32) as u8; p}.into();
     }}
     (scale, offset)
 }

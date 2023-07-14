@@ -11,5 +11,5 @@ cameleon={version='*', features=['libusb'], optional=true}
 uvc={package='uvc-sys', version='*', optional=true}
 ui={git='https://github.com/Matthias-Fauconneau/ui'}
 png={package='image',version='*',default-features=false,features=['png']}
-[patch.'https://github.com/Matthias-Fauconneau/ui']
-ui={path='../ui'}
+#[patch.'https://github.com/Matthias-Fauconneau/image']
+#image={path='../image'}

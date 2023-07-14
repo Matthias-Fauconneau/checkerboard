@@ -591,7 +591,7 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 [[package]]
 name = "image"
 version = "0.0.0"
-source = "git+https://github.com/Matthias-Fauconneau/image#67bed9e1d2e5d69f4487d0eb0a18802e75d00c51"
+source = "git+https://github.com/Matthias-Fauconneau/image#f060d90e5542b8f7a109fca3115aa3c44ff5dcab"
 dependencies = [
  "bytemuck",
  "num",
@@ -1211,6 +1211,7 @@ checksum = "497961ef93d974e23eb6f433eb5fe1b7930b659f06d12dec6fc44a8f554c0bba"
 [[package]]
 name = "ui"
 version = "0.0.0"
+source = "git+https://github.com/Matthias-Fauconneau/ui#32aa26a9dffd1e30699f99bf88973a976ae10f69"
 dependencies = [
  "bytemuck",
  "drm",
