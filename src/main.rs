@@ -94,7 +94,7 @@ fn main() {
     }
     impl ui::Widget for View {
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
-        fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
+        fn paint(&mut self, mut target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
             let nir = self.nir.as_mut().map(|nir| {
                 let nir = nir.next();
                 self.last_frame[0] = Some(nir.clone());
@@ -115,10 +115,7 @@ fn main() {
                 Image::new(xy{x:256,y:192}, cast_slice_box(std::fs::read("ir").unwrap().into_boxed_slice()))
             });
 
-            fn scale(target: &mut Image<&mut[u32]>, image: Image<&[u16]>) -> (f32, uint2) {
-                if image.size <= target.size { let (scale, offset) = upscale(target, image); (scale as f32, offset) }
-                else { let (scale, offset) = downscale(target, image); (1./scale as f32, offset) }
-            }
+
             fn cross(target:&mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, color:u32) {
                 let mut plot = |dx,dy| {
                     let Some(p) = (int2::from(scale*p)+xy{x: dx, y: dy}).try_unsigned() else {return};
@@ -131,7 +128,7 @@ fn main() {
             let P_nir = match checkerboard(nir.as_ref(), true, self.toggle) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 checkerboard::Result::Points(points, image) => {
-                    let (scale, offset) = scale(target, image.as_ref());
+                    let (_, scale, offset) = scale(target, image.as_ref());
                     for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
                     return Ok(());
                 }
@@ -145,7 +142,7 @@ fn main() {
             let P_ir = match checkerboard(ir.as_ref(), false, self.toggle) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 checkerboard::Result::Points(points, image) => {
-                    let (scale, offset) = scale(target, image.as_ref());
+                    let (_, scale, offset) = scale(target, image.as_ref());
                     for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
                     return Ok(());
                 }
@@ -165,19 +162,20 @@ fn main() {
             let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
             let A = mul(inverse(M[1]), mul(A, M[0]));
 
-            let ref source = nir;
-            let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
-            let target_size = source.size*num/den;
-            assert!(target_size <= target.size);
-            let offset = (target.size-target_size)/2;
-            let mut target = target.slice_mut(offset, target_size);
-            let scale = target.size.x as f32/source.size.x as f32;
-
-            affine_blit(&mut target, nir.as_ref(), A);
-            for p in P[1].map(|p| apply(inverse(A), p)) {
-                use vector::{uint2, xy};
-                cross(&mut target, scale, offset, p, 0);
+            let (target_size, scale, offset) = scale(target, nir.as_ref());
+            if self.toggle {
+                if true {
+                    //let ref source = nir;
+                    /*//let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
+                    let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
+                    let target_size = source.size/((den+num-1)/num); // largest integer downscale*/
+                    affine_blit(target, target_size, ir.as_ref(), A, nir.size);
+                } else {
+                    let (_, scale, offset) = image::scale(target, ir.as_ref());
+                    for p in P[1] { cross(&mut target, scale, offset, p, u32::MAX); }
+                }
             }
+            for p in P[1].map(|p| apply(inverse(A), p)) { cross(&mut target, scale, offset, p, u32::MAX); }
             Ok(())
         }
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {

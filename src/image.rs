@@ -9,7 +9,7 @@ use {vector::{xy, uint2, minmax, MinMax}, image::Image};
     }
 }
 
-pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (u32, uint2) {
+pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (uint2, u32, uint2) {
     let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
     let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
     assert!(num >= den);
@@ -50,10 +50,10 @@ pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (u32, u
         }
         row = unsafe{row.add(stride_factor as usize)};
     }}
-    (scale, offset)
+    (target_size, scale, offset)
 }
 
-pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (u32, uint2) {
+pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (uint2, u32, uint2) {
     let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
     let [min, max] = [min, max].map(|m| m as u32);
     let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [target.size.x, source.size.x] } else { [target.size.y, source.size.y] };
@@ -122,19 +122,28 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (u32,
             }
         }
     }}
-    (scale, offset)
+    (target_size, scale, offset)
+}
+
+pub fn scale(target: &mut Image<&mut[u32]>, image: Image<&[u16]>) -> (uint2, f32, uint2) {
+    if image.size <= target.size { let (target_size, scale, offset) = upscale(target, image); (target_size, scale as f32, offset) }
+    else { let (target_size, scale, offset) = downscale(target, image); (target_size, 1./scale as f32, offset) }
 }
 
 use image::bgr8;
 
 use crate::matrix::{mat3, apply};
-pub fn affine_blit(target: &mut Image<&mut[u32]>, source: Image<&[u16]>, A: mat3) {
+pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image<&[u16]>, A: mat3, transform_target_size: uint2) -> (f32, uint2) {
+    assert!(fit_size <= target.size);
+    let offset = (target.size-fit_size)/2;
+    let scale = transform_target_size.x as f32/fit_size.x as f32;
+    let mut target = target.slice_mut(offset, fit_size);
     let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
-    let size = target.size;
-    for y in 0..size.y { for x in 0..size.x {
-        let p = xy{x: x as f32, y: y as f32};
+    for y in 0..target.size.y { for x in 0..target.size.x {
+        let p = scale*xy{x: x as f32, y: y as f32};
         let p = apply(A, p);
         if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
         target[xy{x, y}] = bgr8::from(((source[uint2::from(p)]-min) as u32*0xFF/(max-min) as u32) as u8).into();
     }}
+    (scale, offset)
 }
