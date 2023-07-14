@@ -1,5 +1,6 @@
-#![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit,generic_arg_infer)]#![allow(non_camel_case_types,non_snake_case,unused_imports)]
-use {vector::{xy, size, int2}, ::image::{Image,bgr8}};
+#![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit,generic_arg_infer,array_try_map)]
+#![allow(non_camel_case_types,non_snake_case,unused_imports)]
+use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}};
 mod checkerboard; use checkerboard::*;
 //mod matrix; use matrix::*;
 mod image; use image::*;
@@ -9,7 +10,7 @@ fn main() {
     #[cfg(feature="u3v")] struct NIR(cameleon::payload::PayloadReceiver);
     #[cfg(not(feature="u3v"))] impl NIR {
         fn new() -> Self { Self }
-        //fn next(&mut self) -> Image<Box<[u16]>> { panic!("!u3v") }
+        fn next(&mut self) -> Image<Box<[u16]>> { panic!("!u3v") }
     }
     #[cfg(feature="u3v")] impl NIR {
         fn new() -> Self {
@@ -26,7 +27,11 @@ fn main() {
             exposure_time.set_value(&mut params_ctxt, 1000.).unwrap(); // 15ms=66Hz
             camera.start_streaming(3).unwrap()
          }
-        fn next(&mut self) -> Image<Box<[u16]>> { panic!("!u3v") }
+        fn next(&mut self) -> Image<Box<[u16]>> {
+            let payload = self.nir.recv_blocking().unwrap();
+            let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
+            Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
+        }
     }
 
     let nir = false.then(|| NIR::new());
@@ -81,22 +86,25 @@ fn main() {
     struct View {
         nir: Option<NIR>,
         ir: Option<IR>,
-        last_frame: Option<Image<Box<[u16]>>>,
+        last_frame: [Option<Image<Box<[u16]>>>; 2],
         last_key: char,
         toggle: bool,
     }
     impl ui::Widget for View {
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
         fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
-            #[cfg(feature="u3v")] let nir = {
-                let payload = self.nir.recv_blocking().unwrap();
-                let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
-                Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
-            };
+            let nir = self.nir.as_mut().map(|nir| {
+                let nir = nir.next();
+                self.last_frame[0] = Some(nir.clone());
+                nir
+            }).unwrap_or_else(|| {
+                let image = png::open("nir.png").unwrap();
+                Image::new(vector::xy{x: image.width(), y: image.height()}, image.into_luma8().into_raw().into_boxed_slice().iter().map(|&u8| u8 as u16).collect())
+            });
 
             let ir = self.ir.as_mut().map(|ir| {
                 let ir = ir.next();
-                self.last_frame = Some(ir.clone());
+                self.last_frame[1] = Some(ir.clone());
                 ir
             }).unwrap_or_else(|| {
                 fn cast_slice_box<A,B>(input: Box<[A]>) -> Box<[B]> { // ~bytemuck but allows unequal align size
@@ -115,23 +123,28 @@ fn main() {
             }*/
             //copy(target, nir.as_ref());
 
-            let mut cross = |target:&mut Image<&mut[u32]>, scale, offset, p, color| {
+            fn scale(target: &mut Image<&mut[u32]>, image: Image<&[u16]>) -> (f32, uint2) {
+                if image.size <= target.size { let (scale, offset) = upscale(target, image); (scale as f32, offset) }
+                else { let (scale, offset) = downscale(target, image); (1./scale as f32, offset) }
+            }
+            fn cross(target:&mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, color:u32) {
                 let mut plot = |dx,dy| {
-                    let Some(p) = (int2::from(scale as f32*p)+xy{x: dx, y: dy}).try_unsigned() else {return};
+                    let Some(p) = (int2::from(scale*p)+xy{x: dx, y: dy}).try_unsigned() else {return};
                     if let Some(p) = target.get_mut(offset+p) { *p = color; }
                 };
                 for dy in -16..16 { plot(0, dy); }
                 for dx in -16..16 { plot(dx, 0); }
-            };
-            match checkerboard(ir.as_ref(), self.toggle) {
-                checkerboard::Result::Image(image) => { upscale(target, image.as_ref()); }
+            }
+            //scale(target, nir.as_ref());
+            match checkerboard(nir.as_ref(), true, self.toggle) {
+                checkerboard::Result::Image(image) => { scale(target, image.as_ref()); }
                 checkerboard::Result::Points(points, image) => {
-                    let (scale, offset) = upscale(target, image.as_ref());
+                    let (scale, offset) = scale(target, image.as_ref());
                     for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
                 }
                 checkerboard::Result::Checkerboard(points) => {
-                    let (scale, offset) = upscale(target, ir.as_ref());
-                    for p in points { cross(target, scale, offset, p, 0); }
+                    let (scale, offset) = scale(target, nir.as_ref());
+                    for p in points { cross(target, scale, offset, p, u32::MAX); }
                 }
             }
 
@@ -174,13 +187,14 @@ fn main() {
         }
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {
             if let ui::Event::Key('s') = event {
-                if self.ir.is_some() { std::fs::write("ir", &bytemuck::cast_slice(self.last_frame.as_ref().unwrap())).unwrap(); }
-                else { self.ir = Some(IR::new()); }
+                if self.last_frame.iter_mut().zip(["nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| std::fs::write(name, &bytemuck::cast_slice(image)).unwrap()).count() == 0 {
+                    self.ir = Some(IR::new());
+                }
             }
             if let &ui::Event::Key(' ') = event { self.toggle = !self.toggle; return Ok(true); }
             if let &ui::Event::Key(key) = event { self.last_key = key; return Ok(true); }
             Ok(self.nir.is_some()||self.ir.is_some())
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: None, last_key: '\0', toggle: false}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], last_key: '\0', toggle: false}).unwrap();
 }
