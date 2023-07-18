@@ -61,11 +61,11 @@ fn main() {
                 let mut device_descriptor : *mut uvc_device_descriptor_t = null_mut();
                 assert!(unsafe{uvc_get_device_descriptor(device, &mut device_descriptor as &mut _)} >= 0);
                 assert!(!device_descriptor.is_null());
-                let device_descriptor = unsafe{*device_descriptor};
+                /*let device_descriptor = unsafe{*device_descriptor};
                 println!("{:x} {:x} {:x}", device_descriptor.idVendor, device_descriptor.idProduct, device_descriptor.bcdUVC);
                 if !device_descriptor.serialNumber.is_null() { println!("{:?}", unsafe{std::ffi::CStr::from_ptr(device_descriptor.serialNumber)}); }
                 if !device_descriptor.manufacturer.is_null() { println!("{:?}", unsafe{std::ffi::CStr::from_ptr(device_descriptor.manufacturer)}); }
-                if !device_descriptor.product.is_null() { println!("{:?}", unsafe{std::ffi::CStr::from_ptr(device_descriptor.product)}); }
+                if !device_descriptor.product.is_null() { println!("{:?}", unsafe{std::ffi::CStr::from_ptr(device_descriptor.product)}); }*/
                 let mut device_handle = null_mut();
                 assert!(unsafe{uvc_open(device, &mut device_handle as *mut _)} >= 0);
                 let mut control = unsafe{std::mem::zeroed()};
@@ -128,7 +128,7 @@ fn main() {
                 for dx in -16..16 { plot(dx, 0); }
             }
 
-            let P_nir = match checkerboard(nir.as_ref(), true, false/*self.toggle*/) {
+            let P_nir = match checkerboard(nir.as_ref(), true, ""/*self.debug*/) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 checkerboard::Result::Points(points, image) => {
                     let (_, scale, offset) = scale(target, image.as_ref());
@@ -145,7 +145,7 @@ fn main() {
                 }
             };
 
-            let P_ir = match checkerboard(ir.as_ref(), false, false/*self.toggle*/) {
+            let P_ir = match checkerboard(ir.as_ref(), false, self.debug) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 checkerboard::Result::Points(points, image) => {
                     let (_, scale, offset) = scale(target, image.as_ref());
@@ -154,8 +154,10 @@ fn main() {
                 }
                 checkerboard::Result::Checkerboard(points) => {
                     if self.debug=="ir" {
+                        let (_, NIR_scale, NIR_offset) = scale(target, nir.as_ref()); // FIXME
                         let (_, scale, offset) = scale(target, ir.as_ref());
                         for p in points { cross(target, scale, offset, p, 0); }
+                        for p in P_nir { cross(target, NIR_scale, NIR_offset, p, 0xFF); }
                         return Ok(());
                     }
                     points
@@ -178,26 +180,31 @@ fn main() {
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {
             use ui::Event::Key;
             match event {
-                Key('s') => {
+                Key('b') =>{ self.debug = "binary"; return Ok(true); }
+                Key('d') =>{ self.debug = "distance"; return Ok(true); }
+                Key('f') =>{ self.debug = "filtered"; return Ok(true); }
+                Key('i') =>{ self.debug = "ir"; return Ok(true); }
+                Key('m') =>{ self.debug = "max"; return Ok(true); }
+                Key('n') =>{ self.debug = "nir"; return Ok(true); }
+                Key('o')|Key(' ')|Key('\n') =>{ self.debug = ""; return Ok(true); }
+                Key('p') =>{ self.debug = "peaks"; return Ok(true); }
+                Key('s') =>{ self.debug = "selection"; return Ok(true); }
+                Key('⎙')|Key('\u{F70C}')/*|Key(' ')*/ => {
+                    println!("⎙");
                     if self.last_frame.iter_mut().zip(["nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| std::fs::write(name, &bytemuck::cast_slice(image)).unwrap()).count() == 0 {
                         self.ir = Some(IR::new());
                     }
-                },
-                Key('i') =>{ self.debug = "ir"; return Ok(true); }
-                Key('n') =>{ self.debug = "nir"; return Ok(true); }
-                Key('o')|Key(' ')|Key('\n') =>{ self.debug = ""; return Ok(true); }
-                //Key(' ') =>{ self.toggle = !self.toggle; return Ok(true); }
-                Key('⎙')|Key('\u{F70C}')/*|Key(' ')*/ => {
-                    println!("⎙");
-                    let mut target = Image::uninitialized(xy{x: 2592, y:1944});
-                    let size = target.size;
-                    self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap();
-                    #[cfg(feature="png")] png::save_buffer("checkerboard.png", bytemuck::cast_slice(&target.data), target.size.x, target.size.y, png::ColorType::Rgba8).unwrap();
+                    /*#[cfg(feature="png")] {
+                        let mut target = Image::uninitialized(xy{x: 2592, y:1944});
+                        let size = target.size;
+                        self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap();
+                        png::save_buffer("checkerboard.png", bytemuck::cast_slice(&target.data), target.size.x, target.size.y, png::ColorType::Rgba8).unwrap();
+                    }*/
                 },
                 _ => {},
             }
             Ok(/*self.nir.is_some()||self.ir.is_some()*/true)
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], /*toggle: true*/debug:""}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"selection"}).unwrap();
 }

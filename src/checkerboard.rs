@@ -4,7 +4,7 @@ pub enum Result {
     Image(Image<Box<[u16]>>),
     Points([Vec<(vec2, u32)>; 2], Image<Box<[u16]>>),
 }
-pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: bool) -> Result {
+pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> Result {
     fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
         let mut transpose = Image::uninitialized(source.size.yx());
         /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
@@ -32,7 +32,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
     // Low pass
     let low_pass = (image.size.y > 192).then(|| transpose_low_pass_1D::<12>(transpose_low_pass_1D::<12>(image.as_ref()).as_ref()));
     let image = low_pass.as_ref().map(|image| image.as_ref()).unwrap_or(image);
-
+    
     // High pass
     let source = image;
     let mut low_then_high = if source.size.y <= 192 {
@@ -40,9 +40,9 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
     } else {
         transpose_low_pass_1D::<127>(transpose_low_pass_1D::<127>(source.as_ref()).as_ref())
     };
-    //return Result::Image(low_then_high);
+    if debug=="low" { return Result::Image(low_then_high); }
     low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(p as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
-    //return Result::Image(low_then_high);
+    if debug=="high" { return Result::Image(low_then_high); }
     let high_pass = low_then_high;
     let image = high_pass.as_ref();
 
@@ -68,7 +68,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u16, variance); }
     }
     #[allow(unused_variables)] let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFFFF } else { 0 }));
-    //if toggle { return Result::Image(binary); }
+    if debug=="binary" { return Result::Image(binary); }
 
     fn distance<T: TryFrom<u32>>(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[T]>> where T::Error: std::fmt::Debug {
         let size = image.size;
@@ -117,7 +117,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
 
     let mut points = match [false,true].try_map(|inverse| -> std::result::Result<_, Image<Box<[u32]>>> {
         let distance = distance::<u32>(image.as_ref(), threshold, inverse);
-        //if toggle { return Err(distance) }
+        if inverse && debug=="distance" { return Err(distance) }
 
         let max = {
             const R : u32 = 2;
@@ -134,7 +134,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
             }}
             target
         };
-        //if toggle { return Err(max) }
+        if inverse && debug=="max" { return Err(max) }
 
         let mut max = max;
         let mut points = Vec::new();
@@ -160,11 +160,12 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
     }) {
         Err(image) => return Result::Image({
             let MinMax{min, max} = minmax(image.iter().copied()).unwrap();
-            Image::from_iter(image.size, image.iter().map(|u| ((u-min) as u64*0xFFFF/(max-min) as u64) as u16))
+            if min<max { Image::from_iter(image.size, image.iter().map(|u| ((u-min) as u64*0xFFFF/(max-min) as u64) as u16)) }
+            else { binary }
         }),
         Ok(points) => points
     };
-    //if toggle { return Result::Points(points, high_pass); }
+    if debug=="peaks" { return Result::Points(points, high_pass); }
 
     //for points in &points { assert!(!points.is_empty()); }
     for points in &points { if points.is_empty() { return Result::Image(high_pass); } }
@@ -185,12 +186,11 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
     }
 
     if points[black].len() < N { return Result::Points(points, high_pass); }
-    //if toggle { return Result::Points(points, high_pass); }
-    //return Result::Points(points, high_pass);
+    if debug=="filtered" { return Result::Points(points, high_pass); }
 
     let points = &mut points[black]; //  IR "white" = Visible black
     let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
-    //if toggle && black==1 { return Result::Points(if black==1 {[Vec::new(), points.iter().copied().collect()]}else{[points.iter().copied().collect(),Vec::new()]}, high_pass); }
+    if debug=="selection" { return Result::Points(if black==1 {[Vec::new(), points.iter().copied().collect()]}else{[points.iter().copied().collect(),Vec::new()]}, high_pass); }
 
     let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
     let mut Q = vec![];
