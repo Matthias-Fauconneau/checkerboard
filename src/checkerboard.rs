@@ -115,7 +115,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
         distance
     }
 
-    let mut points = match [false,true].try_map(|inverse| -> std::result::Result<_, Image<Box<[u16]>>> {
+    let mut points = match [false,true].try_map(|inverse| -> std::result::Result<_, Image<Box<[u32]>>> {
         let distance = distance::<u32>(image.as_ref(), threshold, inverse);
         //if toggle { return Err(distance) }
 
@@ -166,7 +166,8 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
     };
     //if toggle { return Result::Points(points, high_pass); }
 
-    for points in &points { assert!(!points.is_empty()); }
+    //for points in &points { assert!(!points.is_empty()); }
+    for points in &points { if points.is_empty() { return Result::Image(high_pass); } }
 
     let black = if black { 0 } else { 1 };
     const N : usize = 4*5+3*4;
@@ -189,7 +190,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
 
     let points = &mut points[black]; //  IR "white" = Visible black
     let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
-    //return Result::Points([Vec::new(), points.iter().copied().collect()], high_pass);
+    //if toggle && black==1 { return Result::Points(if black==1 {[Vec::new(), points.iter().copied().collect()]}else{[points.iter().copied().collect(),Vec::new()]}, high_pass); }
 
     let mut p0 = points.iter().min_by(|a,b| a.0.x.total_cmp(&b.0.x)).unwrap().0;
     let mut Q = vec![];
@@ -213,5 +214,6 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, #[allow(unused)] toggle: 
 
     // First edge is long edge
     if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
+    //if toggle && black==1 { return Result::Points(if black==1 {[Vec::new(), Q.iter().map(|&p| (p,0)).collect()]}else{[Q.iter().map(|&p| (p,0)).collect(), Vec::new()]}, high_pass); }
     Result::Checkerboard(Q.try_into().unwrap())
 }

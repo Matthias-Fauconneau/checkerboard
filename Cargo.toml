@@ -1,6 +1,9 @@
 package={name='checkerboard',version='0.0.0',edition='2021'}
 [features]
-default=['dep:nalgebra']
+u3v=['dep:cameleon']
+uvc=['dep:uvc']
+png=['dep:png']
+default=['dep:nalgebra','u3v','uvc','png']
 [dependencies]
 bytemuck='*'
 num={git='https://github.com/Matthias-Fauconneau/num'}
@@ -9,7 +12,7 @@ nalgebra={version='*', optional=true, default-features=false, features=['std']}
 image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit']}
 cameleon={version='*', features=['libusb'], optional=true}
 uvc={package='uvc-sys', version='*', optional=true}
-ui={git='https://github.com/Matthias-Fauconneau/ui'}
-png={package='image',version='*',default-features=false,features=['png']}
-#[patch.'https://github.com/Matthias-Fauconneau/image']
-#image={path='../image'}
+ui={git='https://github.com/Matthias-Fauconneau/ui',default-features=false,features=['softbuffer']}
+png={package='image',version='*',default-features=false,features=['png'],optional=true}
+[patch.'https://github.com/Matthias-Fauconneau/ui']
+ui={path='../ui'}

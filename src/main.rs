@@ -7,7 +7,10 @@ mod image; use image::*;
 
 fn main() {
     #[cfg(not(feature="u3v"))] struct NIR;
-    #[cfg(feature="u3v")] struct NIR(cameleon::payload::PayloadReceiver);
+    #[cfg(feature="u3v")] struct NIR{
+        #[allow(dead_code)] camera: cameleon::Camera<cameleon::u3v::ControlHandle, cameleon::u3v::StreamHandle>,
+        payload_receiver: cameleon::payload::PayloadReceiver
+    }
     #[cfg(not(feature="u3v"))] impl NIR {
         fn new() -> Self { Self }
         fn next(&mut self) -> Image<Box<[u16]>> { panic!("!u3v") }
@@ -16,7 +19,7 @@ fn main() {
         fn new() -> Self {
             let mut cameras = cameleon::u3v::enumerate_cameras().unwrap();
             //for camera in &cameras { println!("{:?}", camera.info()); }
-            let ref mut camera = cameras[0]; // find(|c| c.info().contains("U3-368xXLE-NIR")).unwrap()
+            let mut camera = cameras.remove(0); // find(|c| c.info().contains("U3-368xXLE-NIR")).unwrap()
             camera.open().unwrap();
             camera.load_context().unwrap();
             let mut params_ctxt = camera.params_ctxt().unwrap();
@@ -25,18 +28,18 @@ fn main() {
             acquisition_frame_rate.set_value(&mut params_ctxt, max).unwrap(); // 28us
             let exposure_time = params_ctxt.node("ExposureTime").unwrap().as_float(&params_ctxt).unwrap();
             exposure_time.set_value(&mut params_ctxt, 1000.).unwrap(); // 15ms=66Hz
-            camera.start_streaming(3).unwrap()
+            Self{payload_receiver: camera.start_streaming(3).unwrap(), camera}
          }
         fn next(&mut self) -> Image<Box<[u16]>> {
-            let payload = self.nir.recv_blocking().unwrap();
+            let payload = self.payload_receiver.recv_blocking().unwrap();
             let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
             let image = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
-            self.send_back(payload);
+            let image = Image::from_iter(image.size, image.iter().map(|&u8| u8 as u16));
+            self.payload_receiver.send_back(payload);
             image
         }
     }
-
-    let nir = false.then(|| NIR::new());
+    let nir = /*std::env::args().any(|a| a=="nir").*/true.then(NIR::new);
 
     #[cfg(not(feature="uvc"))] struct IR;
     #[cfg(feature="uvc")] struct IR(*mut uvc::uvc_stream_handle_t);
@@ -51,7 +54,7 @@ fn main() {
             use uvc::*;
             assert!(unsafe{uvc_init(&mut uvc as *mut _, null_mut())} >= 0);
             let mut devices : *mut *mut uvc_device_t = null_mut();
-            assert!(unsafe{uvc_find_devices(uvc, &mut devices as *mut _, 0xbda, 0x5840, std::ptr::null())} >= 0);
+            assert!(unsafe{uvc_find_devices(uvc, &mut devices as *mut _, 0/*xbda*/, 0/*x5840*/, std::ptr::null())} >= 0);
             for device in std::iter::successors(Some(devices), |devices| Some(unsafe{devices.add(1)})) {
                 let device = unsafe{*device};
                 if device.is_null() { break; }
@@ -77,19 +80,19 @@ fn main() {
         fn next(&mut self) -> Image<Box<[u16]>> {
             use uvc::*;
             let mut frame : *mut uvc_frame_t = std::ptr::null_mut();
-            assert!(unsafe{uvc_stream_get_frame(ir, &mut frame as *mut _, 1000000)} >= 0);
+            assert!(unsafe{uvc_stream_get_frame(self.0, &mut frame as *mut _, 1000000)} >= 0);
             assert!(!frame.is_null());
             let uvc_frame_t{width, height, data, data_bytes, ..} = unsafe{*frame};
-            Image::new(xy{x: width as u32, y: height as u32}, unsafe{std::slice::from_raw_parts(data as *const u16, (data_bytes/2) as usize)})
+            Image::new(xy{x: width as u32, y: height as u32}, Box::from(unsafe{std::slice::from_raw_parts(data as *const u16, (data_bytes/2) as usize)}))
         }
     }
-    let ir = std::env::args().any(|a| a=="ir").then(IR::new);
+    let ir = Some(IR::new()); //std::env::args().any(|a| a=="ir").then(IR::new);
 
     struct View {
         nir: Option<NIR>,
         ir: Option<IR>,
         last_frame: [Option<Image<Box<[u16]>>>; 2],
-        toggle: bool,
+        debug: &'static str,
     }
     impl ui::Widget for View {
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
@@ -98,11 +101,13 @@ fn main() {
                 let nir = nir.next();
                 self.last_frame[0] = Some(nir.clone());
                 nir
-            }).unwrap_or_else(|| {
+            });
+            /*#[cfg(feature="png")] {nir = nir.or_else(|| {
                 let image = png::open("nir.png").unwrap();
                 Image::new(vector::xy{x: image.width(), y: image.height()}, image.into_luma8().into_raw().into_boxed_slice().iter().map(|&u8| u8 as u16).collect())
-            });
-
+            });}*/
+            let nir = nir.unwrap();
+            
             let ir = self.ir.as_mut().map(|ir| {
                 let ir = ir.next();
                 self.last_frame[1] = Some(ir.clone());
@@ -123,24 +128,38 @@ fn main() {
                 for dx in -16..16 { plot(dx, 0); }
             }
 
-            let P_nir = match checkerboard(nir.as_ref(), true, self.toggle) {
+            let P_nir = match checkerboard(nir.as_ref(), true, false/*self.toggle*/) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 checkerboard::Result::Points(points, image) => {
                     let (_, scale, offset) = scale(target, image.as_ref());
                     for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
                     return Ok(());
                 }
-                checkerboard::Result::Checkerboard(points) => points,
+                checkerboard::Result::Checkerboard(points) => {
+                    if self.debug=="nir" {
+                        let (_, scale, offset) = scale(target, nir.as_ref());
+                        for p in points { cross(target, scale, offset, p, u32::MAX); }
+                        return Ok(());
+                    }
+                    points
+                }
             };
 
-            let P_ir = match checkerboard(ir.as_ref(), false, self.toggle) {
+            let P_ir = match checkerboard(ir.as_ref(), false, false/*self.toggle*/) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 checkerboard::Result::Points(points, image) => {
                     let (_, scale, offset) = scale(target, image.as_ref());
                     for (points, &color) in points.iter().zip(&[u32::MAX, 0]) { for &(p, _) in points { cross(target, scale, offset, p, color); }}
                     return Ok(());
                 }
-                checkerboard::Result::Checkerboard(points) => points,
+                checkerboard::Result::Checkerboard(points) => {
+                    if self.debug=="ir" {
+                        let (_, scale, offset) = scale(target, ir.as_ref());
+                        for p in points { cross(target, scale, offset, p, 0); }
+                        return Ok(());
+                    }
+                    points
+                }
             };
 
             let P = [P_nir, P_ir]; //P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
@@ -164,18 +183,21 @@ fn main() {
                         self.ir = Some(IR::new());
                     }
                 },
+                Key('i') =>{ self.debug = "ir"; return Ok(true); }
+                Key('n') =>{ self.debug = "nir"; return Ok(true); }
+                Key('o')|Key(' ')|Key('\n') =>{ self.debug = ""; return Ok(true); }
                 //Key(' ') =>{ self.toggle = !self.toggle; return Ok(true); }
-                Key('⎙')|Key(' ') => {
+                Key('⎙')|Key('\u{F70C}')/*|Key(' ')*/ => {
                     println!("⎙");
                     let mut target = Image::uninitialized(xy{x: 2592, y:1944});
                     let size = target.size;
                     self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap();
-                    png::save_buffer("checkerboard.png", bytemuck::cast_slice(&target.data), target.size.x, target.size.y, png::ColorType::Rgba8).unwrap();
+                    #[cfg(feature="png")] png::save_buffer("checkerboard.png", bytemuck::cast_slice(&target.data), target.size.x, target.size.y, png::ColorType::Rgba8).unwrap();
                 },
                 _ => {},
             }
-            Ok(self.nir.is_some()||self.ir.is_some())
+            Ok(/*self.nir.is_some()||self.ir.is_some()*/true)
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], toggle: false}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], /*toggle: true*/debug:""}).unwrap();
 }
