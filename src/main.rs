@@ -86,7 +86,7 @@ fn main() {
             Image::new(xy{x: width as u32, y: height as u32}, Box::from(unsafe{std::slice::from_raw_parts(data as *const u16, (data_bytes/2) as usize)}))
         }
     }
-    let ir = Some(IR::new()); //std::env::args().any(|a| a=="ir").then(IR::new);
+    let ir = std::env::args().any(|a| a=="ir").then(IR::new);
 
     struct View {
         nir: Option<NIR>,
@@ -145,7 +145,7 @@ fn main() {
                 }
             };
 
-            let P_ir = match checkerboard(ir.as_ref(), false, self.debug) {
+            /*let P_ir = match checkerboard(ir.as_ref(), false, self.debug) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 checkerboard::Result::Points(points, image) => {
                     let (_, scale, offset) = scale(target, image.as_ref());
@@ -162,6 +162,18 @@ fn main() {
                     }
                     points
                 }
+            };*/
+
+            let P_ir = {
+                let mut corners = opencv::core::Mat::default();
+                if !{
+                    let ir = Image::from_iter(ir.size, ir.iter().map(|&u16| u16 as u8));
+                    opencv::calib3d::find_chessboard_corners(&opencv::core::Mat::from_slice_rows_cols(&ir, ir.size.x as usize, ir.size.y as usize).unwrap(), opencv::core::Size::new(8,6), &mut corners, 0).unwrap() 
+                } {
+                    scale(target, ir.as_ref());
+                    return Ok(());
+                }
+                panic!("{corners:?}")
             };
 
             let P = [P_nir, P_ir]; //P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];

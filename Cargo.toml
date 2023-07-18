@@ -3,7 +3,7 @@ package={name='checkerboard',version='0.0.0',edition='2021'}
 u3v=['dep:cameleon']
 uvc=['dep:uvc']
 png=['dep:png']
-default=['dep:nalgebra','u3v','uvc','png']
+default=['dep:nalgebra','u3v','png']#,'uvc']
 [dependencies]
 bytemuck='*'
 num={git='https://github.com/Matthias-Fauconneau/num'}
@@ -11,8 +11,9 @@ vector={git='https://github.com/Matthias-Fauconneau/vector',features=['unstable'
 nalgebra={version='*', optional=true, default-features=false, features=['std']}
 image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit']}
 cameleon={version='*', features=['libusb'], optional=true}
-uvc={package='uvc-sys', version='*', optional=true}
+uvc={package='uvc-sys', version='*', optional=true}#, features = ['vendor']} #"uvc_format_desc_union_(anonymous_at_/usr/include/libuvc/libuvc_h_177_3)" is not a valid Ident
 ui={git='https://github.com/Matthias-Fauconneau/ui',default-features=false,features=['softbuffer']}
 png={package='image',version='*',default-features=false,features=['png'],optional=true}
+opencv={version='*',features=['clang-runtime']} #compat with uvc/bindgen
 [patch.'https://github.com/Matthias-Fauconneau/ui']
 ui={path='../ui'}
