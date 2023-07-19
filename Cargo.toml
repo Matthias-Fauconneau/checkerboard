@@ -15,6 +15,7 @@ cameleon={version='*', features=['libusb'], optional=true}
 uvc={package='uvc-sys', git='https://github.com/l1npengtul/libuvc-rs', optional=true}
 ui={git='https://github.com/Matthias-Fauconneau/ui',default-features=false,features=['softbuffer']}
 png={package='image',version='*',default-features=false,features=['png'],optional=true}
+imageproc='*'
 #opencv={version='*', features=['clang-runtime'], optional=true} #compat with uvc/bindgen
 #[patch.crates-io]
 #uvc-sys={git='https://github.com/l1npengtul/libuvc-rs'} #bindgen >=0.62: uvc_format_desc_union_(anonymous_at_/usr/include/libuvc/libuvc_h_177_3)" is not a valid Ident

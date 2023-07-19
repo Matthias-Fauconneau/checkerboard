@@ -2,7 +2,7 @@ use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinM
 pub enum Result {
     Checkerboard([vec2; 4]),
     Image(Image<Box<[u16]>>),
-    Points([Vec<(vec2, u32)>; 2], Image<Box<[u16]>>),
+    Points([Vec<(vec2, [Option<vec2>; 4])>; 2], Image<Box<[u16]>>),
 }
 pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> Result {
     fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
@@ -70,7 +70,15 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
     #[allow(unused_variables)] let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFFFF } else { 0 }));
     if debug=="binary" { return Result::Image(binary); }
 
-    fn distance<T: TryFrom<u32>>(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[T]>> where T::Error: std::fmt::Debug {
+    let image8 = png::GrayImage::from_vec(image.size.x, image.size.y, image.iter().map(|u16| (u16>>8) as u8).collect()).unwrap();
+    let contours = imageproc::contours::find_contours_with_threshold::<u16>(&image8, (threshold>>8) as u8);
+    let mut contour_image = Image::zero(image.size);
+    for contour in contours {
+        for p in contour.points { contour_image[xy{x: p.x as u32, y: p.y as u32}] = 0xFFFF; }
+    }
+    return Result::Image(contour_image);
+
+    /*fn distance<T: TryFrom<u32>>(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[T]>> where T::Error: std::fmt::Debug {
         let size = image.size;
         let mut G = Image::uninitialized(size);
         for x in 0..size.x {
@@ -117,7 +125,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
 
     let mut points = match [false,true].try_map(|inverse| -> std::result::Result<_, Image<Box<[u32]>>> {
         let distance = distance::<u32>(image.as_ref(), threshold, inverse);
-        if inverse && debug=="distance" { return Err(distance) }
+        if inverse!=black && debug=="distance" { return Err(distance) }
 
         let max = {
             const R : u32 = 2;
@@ -134,7 +142,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
             }}
             target
         };
-        if inverse && debug=="max" { return Err(max) }
+        if inverse!=black && debug=="max" { return Err(max) }
 
         let mut max = max;
         let mut points = Vec::new();
@@ -165,13 +173,14 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
         }),
         Ok(points) => points
     };
-    if debug=="peaks" { return Result::Points(points, high_pass); }
+    if debug=="peaks" { return Result::Points(points.map(|points| points.iter().map(|&(p, _)|(p, [None; 4])).collect()), high_pass); }
 
     //for points in &points { assert!(!points.is_empty()); }
     for points in &points { if points.is_empty() { return Result::Image(high_pass); } }
 
     let black = if black { 0 } else { 1 };
     const N : usize = 4*5+3*4;
+    let all_points = points.clone();
     loop {
         let isolation = [0,1].map(|i| minmax(points[i%2].iter().map(|a| points[[1,0][i%2]].iter().map(|b| vector::sq(a.0-b.0)).min_by(f32::total_cmp).unwrap())).unwrap());
         let (i, isolation) = isolation.into_iter().enumerate().max_by(|(_, a), (_, b)| a.max.total_cmp(&b.max)).unwrap();
@@ -185,7 +194,13 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
         //if points.each_ref().map(Vec::len) != before { assert!(points[i%2].len() == before[i%2]-1); continue; } else { break; }
     }
 
-    if points[black].len() < N { return Result::Points(points, high_pass); }
+    return Result::Points([0,1].map(|i| {
+        points[i].iter().map(|&(p, _)|
+            (p, [None; 4])
+        ).collect()
+    }), high_pass);*/
+
+    /*if points[black].len() < N { return Result::Points(points, high_pass); }
     if debug=="filtered" { return Result::Points(points, high_pass); }
 
     let points = &mut points[black]; //  IR "white" = Visible black
@@ -215,5 +230,5 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
     // First edge is long edge
     if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
     //if toggle && black==1 { return Result::Points(if black==1 {[Vec::new(), Q.iter().map(|&p| (p,0)).collect()]}else{[Q.iter().map(|&p| (p,0)).collect(), Vec::new()]}, high_pass); }
-    Result::Checkerboard(Q.try_into().unwrap())
+    Result::Checkerboard(Q.try_into().unwrap())*/
 }
