@@ -79,22 +79,26 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
     if debug=="binary" { return Result::Image(binary); }
 
     //let binary8 = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
-    let binary8 = Image::from_iter(image.size, image.iter().map(|&p| match black {
+    let mut binary8 = Image::from_iter(image.size, image.iter().map(|&p| match black {
         true => if p>threshold { 0xFF } else { 0 },
         false => if p<threshold { 0xFF } else { 0 }
     }));
     let mut erode = Image::zero(binary8.size);
-    for _ in 0..1 {
+    for i in 0..if black {6} else {2} {
         for y in 1..erode.size.y-1 {
             for x in 1..erode.size.x-1 {
                 let p = |dx, dy| binary8[xy{x:(x as i32+dx) as u32,y: (y as i32+dy) as u32}];
-                erode[xy{x,y}] = [p(-1,-1),p(0,-1),p(1,-1),p(-1,0),p(0,0),p(1,0),p(-1,1),p(0,1),p(1,1)].into_iter().max().unwrap();
+                //erode[xy{x,y}] = [/*p(-1,-1),*/p(0,-1),/*p(1,-1),*/p(-1,0),p(0,0),p(1,0),/*p(-1,1),*/p(0,1)/*,p(1,1)*/].into_iter().max().unwrap();
+                erode[xy{x,y}] = 
+                    if i%2 == 0 {[p(0,-1),p(-1,0),p(0,0),p(1,0),p(0,1)].into_iter().max()}
+                    else {[p(-1,-1),p(0,-1),p(1,-1),p(-1,0),p(0,0),p(1,0),p(-1,1),p(0,1),p(1,1)].into_iter().max()}.unwrap();
             }
         }
+        std::mem::swap(&mut binary8, &mut erode);
     }
-    if debug=="erode" { return Result::Image(Image::from_iter(erode.size, erode.iter().map(|&p| (p as u16)<<8))); }
+    if debug=="erode" { return Result::Image(Image::from_iter(binary8.size, binary8.iter().map(|&p| (p as u16)<<8))); }
 
-    let binary8 = png::GrayImage::from_vec(erode.size.x, erode.size.y, erode.data.into_vec()).unwrap();
+    let binary8 = png::GrayImage::from_vec(binary8.size.x, binary8.size.y, binary8.data.into_vec()).unwrap();
     let contours = imageproc::contours::find_contours::<u16>(&binary8);
     let mut contour_image = Image::zero(image.size);
     let mut quad_contour_image = Image::zero(image.size);
@@ -118,7 +122,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
             Some([a,b,c,d].map(|i| contour[i]))
         };
         let Some([a,b,c,d]) = quad(&contour) else {continue;};
-        let area = {let abc = cross2(b-a,c-a); if abc<0. {continue;} let cda = cross2(c-b,d-b); if cda<0. {continue;} (abc+cda)/2.};
+        let area = {let abc = cross2(b-a,c-a); if abc<0. {continue;} let cda = cross2(d-c,a-c); if cda<0. {continue;} (abc+cda)/2.};
         //let area = {let abc = cross2(b-a,c-a); assert!(abc>=0., "abc {abc}"); let cda = cross2(c-b,d-b); assert!(cda>=0., "cda {cda}"); (abc+cda)/2.};
         if black {
             if area < 128.*128. { continue; } // only for NIR
@@ -300,8 +304,14 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
     //let Some(mut Q) = quad(&Q) else {return Result::Points(Q);};
 
     // First edge is long edge
-    if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
+    //if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(0,3); }
+    
+    /*let [a,b,c,d]:[vec2;4] = Q.try_into().unwrap();
+    let area = {let abc = cross2(b-a,c-a); let cda = cross2(d-c,a-c); assert!((abc > 0. && cda > 0.) || (abc < 0. && cda < 0.), "{abc} {cda}"); (abc+cda)/2.};
+    let Q = if area > 0. {[a,b,c,d]} else {[a,d,c,b]};*/
+    let i0 = Q.iter().enumerate().min_by(|(_,a),(_,b)| (a.x+a.y).total_cmp(&(b.x+b.y))).unwrap().0; // top left
+    Result::Checkerboard([0,1,2,3].map(|i|Q[(i0+i)%4]))
     //if toggle && black==1 { return Result::Points(if black==1 {[Vec::new(), Q.iter().map(|&p| (p,0)).collect()]}else{[Q.iter().map(|&p| (p,0)).collect(), Vec::new()]}, high_pass); }
-    Result::Checkerboard(Q.try_into().unwrap())
+    //Result::Checkerboard(Q.try_into().unwrap())
     //Result::Checkerboard(Q)
 }

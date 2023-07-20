@@ -93,6 +93,7 @@ fn main() {
         ir: Option<IR>,
         last_frame: [Option<Image<Box<[u16]>>>; 2],
         debug: &'static str,
+        debug_which: &'static str,
     }
     impl ui::Widget for View {
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
@@ -128,7 +129,7 @@ fn main() {
                 for dx in -64..64 { plot(dx, 0); }
             }
 
-            let P_nir = match checkerboard(nir.as_ref(), true, /*self.debug*/"") {
+            let P_nir = match checkerboard(nir.as_ref(), true, if self.debug_which=="nir" {self.debug} else{""}) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 /*checkerboard::Result::Points(points, image) => {
                     let (_, scale, offset) = scale(target, image.as_ref());
@@ -143,7 +144,8 @@ fn main() {
                 checkerboard::Result::Checkerboard(points) => {
                     if self.debug=="nir" {
                         let (_, scale, offset) = scale(target, nir.as_ref());
-                        for p in points { cross(target, scale, offset, p, u32::MAX); }
+                        //for p in points { cross(target, scale, offset, p, u32::MAX); }
+                        for (i,&p) in points.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
                         return Ok(());
                     }
                     points
@@ -151,7 +153,7 @@ fn main() {
             };
 
             //if self.debug=="ir" { scale(target, ir.as_ref()); return Ok(()); }
-            let P_ir = match checkerboard(ir.as_ref(), false, self.debug) {
+            let P_ir = match checkerboard(ir.as_ref(), false, if self.debug_which=="ir" {self.debug} else{""}) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 /*checkerboard::Result::Points(points, image) => {
                     let (_, scale, offset) = scale(target, image.as_ref());
@@ -166,10 +168,12 @@ fn main() {
                 }
                 checkerboard::Result::Checkerboard(points) => {
                     if self.debug=="ir" {
-                        let (_, NIR_scale, NIR_offset) = scale(target, nir.as_ref()); // FIXME
+                        //let (_, NIR_scale, NIR_offset) = scale(target, nir.as_ref()); // FIXME
                         let (_, scale, offset) = scale(target, ir.as_ref());
-                        for p in points { cross(target, scale, offset, p, 0xFF00FF); }
-                        for p in P_nir { cross(target, NIR_scale, NIR_offset, p, 0x00FF00); }
+                        //for p in points { cross(target, scale, offset, p, 0xFF00FF); } // purple
+                        for (i,&p) in points.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF0][i]); }    
+                        //for p in P_nir { cross(target, NIR_scale, NIR_offset, p, 0x00FF00); } //green
+                        //for (i,&p) in P_nir.iter().enumerate() { cross(target, scale, offset, p, [0x00_00FF,0x00_FF00,0x00_FFFF,0xFF_0000][i]); }
                         return Ok(());
                     }
                     points
@@ -197,7 +201,12 @@ fn main() {
             let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
             let A = mul(inverse(M[1]), mul(A, M[0]));
 
-            let (target_size, _, _) = scale(target, nir.as_ref());
+            let (_, IR_scale, IR_offset) = scale(target, ir.as_ref()); // FIXME
+            let (target_size, scale, offset) = scale(target, nir.as_ref());
+            /*for (i,&p) in P_nir.iter().enumerate() { cross(target, scale, offset, p, [0x00_0000,0x00_00FF,0x00_FF00,0x00_FFFF][i]); }    
+            for (i,&p) in P_ir.iter().enumerate() { cross(target, IR_scale, IR_offset, p, [0xFF_0000,0xFF_00FF,0xFF_FF00,0xFF_FFFFF][i]); }*/
+            for (i,&p) in P_nir.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
+            for (i,&p) in P_ir.iter().enumerate() { cross(target, IR_scale, IR_offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
             affine_blit(target, target_size, ir.as_ref(), A, nir.size);
             Ok(())
         }
@@ -210,10 +219,10 @@ fn main() {
                 Key('e') =>{ self.debug = "erode"; return Ok(true); }
                 Key('f') =>{ self.debug = "filtered"; return Ok(true); }
                 Key('h') =>{ self.debug = "high"; return Ok(true); }
-                Key('i') =>{ self.debug = "ir"; return Ok(true); }
+                Key('i') =>{ self.debug_which = "ir"; return Ok(true); }
                 Key('l') =>{ self.debug = "low"; return Ok(true); }
                 Key('m') =>{ self.debug = "max"; return Ok(true); }
-                Key('n') =>{ self.debug = "nir"; return Ok(true); }
+                Key('n') =>{ self.debug_which = "nir"; return Ok(true); }
                 Key('o')|Key(' ')|Key('\n') =>{ self.debug = ""; return Ok(true); }
                 Key('p') =>{ self.debug = "peaks"; return Ok(true); }
                 Key('q') =>{ self.debug = "quads"; return Ok(true); }
@@ -235,5 +244,5 @@ fn main() {
             Ok(/*self.nir.is_some()||self.ir.is_some()*/true)
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"quad"}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"", debug_which: "nir"}).unwrap();
 }
