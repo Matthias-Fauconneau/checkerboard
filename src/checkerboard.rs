@@ -32,7 +32,7 @@ pub fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[
     transpose
 }
 
-pub enum Result {
+/*pub enum Result {
     Checkerboard([vec2; 4]),
     Image(Image<Box<[u16]>>),
     //Points(Vec<vec2>),
@@ -426,4 +426,97 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
     //if toggle && black==1 { return Result::Points(if black==1 {[Vec::new(), Q.iter().map(|&p| (p,0)).collect()]}else{[Q.iter().map(|&p| (p,0)).collect(), Vec::new()]}, high_pass); }
     //Result::Checkerboard(Q.try_into().unwrap())
     //Result::Checkerboard(Q)
+}*/
+
+pub fn checkerboard(image: Image<&[u16]>) -> Vec<uint2> {
+    // High pass
+    let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap();
+    let mut low_then_high = transpose_low_pass_1D::<16>(transpose_low_pass_1D::<16>(source.as_ref()).as_ref());
+    if !(min < max) { return Ok(()); }
+    low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
+    let source = low_then_high;
+
+    if self.debug_which=="ir" && ["high"].contains(&self.debug) { scale(target, source.as_ref()); return Ok(()); }
+
+    let source = {
+        let mut target = Image::zero(source.size);
+        {
+            const R : u32 = 3;
+            for y in R..source.size.y-R {
+                for x in R..source.size.x-R {
+                    let [p00,p10,p01,p11] = {let r=R as i32;[xy{x:-r,y:-r},xy{x:r,y:-r},xy{x:-r,y:r},xy{x:r,y:r}]}.map(|d|source[(xy{x,y}.signed()+d).unsigned()]);
+                    let threshold = ([p00,p10,p01,p11].into_iter().map(|u16| u16 as u32).sum::<u32>()/4) as u16;
+                    if p00<threshold && p11<threshold && p10>threshold && p01>threshold ||
+                        p00>threshold && p11>threshold && p10<threshold && p01<threshold {
+                        target[xy{x,y}] = (num::abs(p00 as i32 + p11 as i32 - (p10 as i32 + p01 as i32))/2) as u16;
+                    }
+                }
+            }
+        }
+        target
+    };
+
+    let source = transpose_low_pass_1D::<1>(transpose_low_pass_1D::<1>(source.as_ref()).as_ref());
+
+    let mut points = Vec::new();
+    //let max = {
+        const R : u32 = 12;
+        //let mut target = Image::zero(source.size);
+        for y in R..source.size.y-R { for x in R..source.size.x-R {
+            let center = source[xy{x, y}];
+            if center < 16384 { continue; }
+            let mut flat = 0;
+            if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+                if (dx,dy) == (0,0) { continue; }
+                if source[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] > center { return false; }
+                if source[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] == center { flat += 1; }
+            }} true})() { 
+                //target[xy{x,y}] = center; 
+                points.push(xy{x,y});
+            }
+        }}
+        //target
+    //};
+    /*let mut max = max;
+    let mut points = Vec::new();
+    let R : u32 = 12; // Merges close peaks (top left first)
+    for y in R..max.size.y-R { for x in R..max.size.x-R {
+        let value = max[xy{x,y}];
+        if value == 0 { continue; }
+        let mut flat = 0;
+        let mut sum : uint2 = num::zero();
+        for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+            let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
+            if max[p] == 0 { continue; }
+            flat += 1;
+            sum += p;
+        }}
+        points.push( (vec2::from(int2::from(xy{x,y}+sum))/((1+flat) as f32), value) );
+        for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+            let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
+            max[p] = 0; // Merge small flat plateaus as single point
+        }}
+    }}*/
+
+    //let points = points.iter().map(|(a,_)| (*a, points.iter().filter(|(b,_)| a!=b).map(|&(b,_)| (b, vector::sq(b-a))).min_by(|(_,a),(_,b)| f32::total_cmp(a, b)).unwrap().0));
+    if points.len() < 4 { return Ok(()); }
+    let points : Vec<_> = points.iter().map(|&a| (a, {
+        //points.iter().filter(|(b,_)| a!=b).map(|&(b,_)| (b, vector::sq(b-a))).min_by(|(_,a),(_,b)| f32::total_cmp(a, b)).unwrap().0
+        let mut p = points.iter().filter(|&b| a!=*b).copied().collect::<Box<_>>();
+        assert!(p.len() >= 3);
+        let closest = if p.len() > 3 { let (closest, _, _) = p.select_nth_unstable_by_key(3, |p| vector::sq(p-a)); &*closest } else { &p };
+        <[uint2; 3]>::try_from(closest).unwrap().map(|p| (vector::sq(p-a)<32*32).then_some(p))
+    })).collect();
+
+    points.iter().map(|&p| {
+        let mut connected = Vec::new();
+        fn walk(points: &[(uint2, [Option<uint2>; 3])], mut connected: &mut Vec<uint2>, (p, neighbours): (uint2, [Option<uint2>; 3])) {
+            if !connected.contains(&p) {
+                connected.push(p);
+                for p in neighbours.iter().filter_map(|p| *p) { walk(points, &mut connected, *points.iter().find(|(q,_)| q==&p).unwrap()); }
+            }
+        }
+        walk(&points, &mut connected, p);
+        connected
+    }).max_by_key(|g| g.len()).unwrap()
 }
