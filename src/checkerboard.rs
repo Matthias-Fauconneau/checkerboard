@@ -1,4 +1,37 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image};
+
+pub fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
+    let mut transpose = Image::uninitialized(source.size.yx());
+    // /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
+    let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
+    if !(min < max) { return transpose;}
+    for y in 0..source.size.y {
+        let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
+        for x in 0..R { sum += source[xy{x, y}] as u32; }
+        for x in 0..R {
+            sum += source[xy{x: x+R, y}] as u32;
+            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: 0, y}] as u32;
+        }
+        for x in R..source.size.x-R {
+            sum += source[xy{x: x+R, y}] as u32;
+            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
+            //transpose[xy{x: y, y: x}] = (sum / (R+1+R) as u32) as u16;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        }
+        for x in source.size.x-R..source.size.x {
+            sum += source[xy{x: source.size.x-1, y}] as u32;
+            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
+            //transpose[xy{x: y, y: x}] = (sum / (R+1+R) as u32) as u16;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        }
+    }
+    transpose
+}
+
 pub enum Result {
     Checkerboard([vec2; 4]),
     Image(Image<Box<[u16]>>),
@@ -10,43 +43,21 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
     let mut high_pass = None;
     const METHOD1: bool = false;
     let image = if /* !black || METHOD1*/true { // only for IR with method 2
-        fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
-            let mut transpose = Image::uninitialized(source.size.yx());
-            /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
-            for y in 0..source.size.y {
-                let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
-                for x in 0..R { sum += source[xy{x, y}] as u32; }
-                for x in 0..R {
-                    sum += source[xy{x: x+R, y}] as u32;
-                    transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-                    sum -= source[xy{x: 0, y}] as u32;
-                }
-                for x in R..source.size.x-R {
-                    sum += source[xy{x: x+R, y}] as u32;
-                    transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-                    sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
-                }
-                for x in source.size.x-R..source.size.x {
-                    sum += source[xy{x: source.size.x-1, y}] as u32;
-                    transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-                    sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
-                }
-            }
-            transpose
-        }
         // Low pass
         let low_pass = (image.size.y > 192).then(|| transpose_low_pass_1D::</*32*/12>(transpose_low_pass_1D::</*32*/12>(image.as_ref()).as_ref()));
         let image = low_pass.as_ref().map(|image| image.as_ref()).unwrap_or(image);
         
         // High pass
         let source = image;
+        let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
         let mut low_then_high = if source.size.y <= 192 {
             transpose_low_pass_1D::<16/*32*/>(transpose_low_pass_1D::<16/*32*/>(source.as_ref()).as_ref())
         } else {
             transpose_low_pass_1D::<127>(transpose_low_pass_1D::<127>(source.as_ref()).as_ref())
         };
+        if !(min < max) { return Result::Image(low_then_high); }
         if debug=="low" { return Result::Image(low_then_high); }
-        low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(p as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
+        low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
         if debug=="high" { return Result::Image(low_then_high); }
         high_pass = Some(low_then_high);
         high_pass.as_ref().unwrap().as_ref()
@@ -80,14 +91,14 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
     }));
     if debug=="binary" { return Result::Image(binary); }
 
-    let points = if METHOD1==false {
+    let points : Vec<_> = if METHOD1==false {
         //let binary8 = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
         let mut binary8 = Image::from_iter(image.size, image.iter().map(|&p| match black {
             true => if p>threshold { 0xFF } else { 0 },
             false => if p<threshold { 0xFF } else { 0 }
         }));
         let mut erode = Image::zero(binary8.size);
-        for i in 0..if black {6} else {2} {
+        for i in 0..if black {6} else {/*2*/4} {
             for y in 1..erode.size.y-1 {
                 for x in 1..erode.size.x-1 {
                     let p = |dx, dy| binary8[xy{x:(x as i32+dx) as u32,y: (y as i32+dy) as u32}];
@@ -104,13 +115,12 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
         let binary8 = png::GrayImage::from_vec(binary8.size.x, binary8.size.y, binary8.data.into_vec()).unwrap();
         let contours = imageproc::contours::find_contours::<u16>(&binary8);
         let mut contour_image = Image::zero(image.size);
-        let mut quad_contour_image = Image::zero(image.size);
-        let mut points = Vec::new();
+        let mut quads = Vec::new();
         for (_i, contour) in contours.iter().enumerate() {
             //if contour.border_type != imageproc::contours::BorderType::Hole { continue; }
             let contour = contour.points.iter().map(|p| vec2::from(xy{x: p.x, y: p.y})).collect::<Box<_>>();
             if contour.len() < 4 {continue;}
-            for p in &*contour { contour_image[xy{x: p.x as u32, y: p.y as u32}] = 0xFFFF/*[0xFF,0xFF00,0xFF0000][i%3]*/; }
+            if debug=="contour" { for p in &*contour { contour_image[xy{x: p.x as u32, y: p.y as u32}] = 0xFFFF/*[0xFF,0xFF00,0xFF0000][i%3]*/; }}
             let quad = /*|contour:&[vec2]| -> Option<[vec2; 4]> {
                 use itertools::Itertools;
                 let key = |((_,&a),(_,&b))| vector::sq(a-b);
@@ -136,24 +146,64 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
                 Some(Q.try_into().unwrap())
             };
             let Some([a,b,c,d]) = quad(&contour) else {continue;};
+            let area = {let abc = cross2(b-a,c-a); if abc<0. {continue;} let cda = cross2(d-c,a-c); if cda<0. {continue;} (abc+cda)/2.};
             if black {
-                let area = {let abc = cross2(b-a,c-a); if abc<0. {continue;} let cda = cross2(d-c,a-c); if cda<0. {continue;} (abc+cda)/2.};
                 //let area = {let abc = cross2(b-a,c-a); assert!(abc>=0., "abc {abc}"); let cda = cross2(c-b,d-b); assert!(cda>=0., "cda {cda}"); (abc+cda)/2.};
-                if area < 64.*64./*128.*128.*/ { continue; } // only for NIR*/
+                if area < 64.*64./*128.*128.*/ { continue; } // only for NIR
+                //if area > 256.*256. { continue; } // only for NIR
+                if [a,b,c,d,a].array_windows().any(|&[a,b]| vector::sq(b-a)>256.*256.) {continue;}
             } else { // IR
-                //if area < 2.*2./*4.*4.*//*8.*8.*/ { continue; }
+                if area < /*2.*2.*/4.*4./*8.*8.*/ { continue; }
+                if [a,b,c,d,a].array_windows().any(|&[a,b]| vector::sq(b-a)>16.*16.) {continue;}
             }
             //println!("{}", sqrt(area));
-            for &[a,b] in [a,b,c,d,a].array_windows() {
+            /*if debug=="quads" { for &[a,b] in [a,b,c,d,a].array_windows() {
                 for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; }
-            }
-            points.extend([a,b,c,d]);
+            }}*/
+            quads.push([a,b,c,d]);
         }
         if debug=="contour" { return Result::Image(contour_image); }
-        if debug=="quads" { return Result::Image(quad_contour_image); }
         //if debug=="quads" { /*assert!(!points.is_empty());*/ return Result::Points(points); }
         //return Result::Image(contour_image);
-        points
+
+        let all_quads = quads.clone();
+        quads.retain(|a| all_quads.iter().any(|b| b!=a && a.iter().any(|p| b.iter().any(|q| vector::sq(q-p) < if black {256.*256.} else {32.*32.}))));
+        /*if debug=="quads" { for &[a,b] in [a,b,c,d,a].array_windows() {
+                for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; }
+            }}*/
+
+        if debug=="quads" { 
+            let mut quad_contour_image = Image::zero(image.size);
+            for q in quads {
+                for &[a,b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() {
+                    for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; }
+                }
+            }
+            return Result::Image(quad_contour_image); 
+        }
+        
+        /*/*let quads = */quads.iter().map(|a| {
+            let e = {let [a,b,c,d] = &a; [a,b,c,d,a]}.array_windows().map(|&[a,b]| vector::sq(b-a)).min_by(f32::total_cmp).unwrap();
+            a.map(|p| (p, quads.iter().map(|b| b.iter().map(|q| vector::sq(q-p))).flatten().min_by(f32::total_cmp).unwrap() < e))
+        })//.collect();
+        .filter(|a| a.iter().any(|&(_,e)| e))
+        /*quads.into_iter()*/.map(|q| q.into_iter().map(|(p,_)| p)).flatten().collect()*/
+
+        /*let quads : Vec<_> = quads.iter().enumerate().map(|(i,a)| {
+            a.map(|p| (p, quads.iter().enumerate().filter(|&(j,_)| j!=i).map(|(j,b)| b.iter().enumerate().map(move |(qi,q)| (j, qi, vector::sq(q-p)))).flatten().min_by(|(_,_,a),(_,_,b)| f32::total_cmp(a,b)).unwrap()))
+        }).collect();
+        for q in &quads {
+            for &(a, (q, p, _e)) in q {
+                let b = quads[q][p].0;
+                for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; }
+            }
+        }
+        quads.into_iter().filter(|a| {
+            let E = {let [a,b,c,d] = &a; [a,b,c,d,a]}.array_windows().map(|&[a,b]| vector::sq(b.0-a.0)).min_by(f32::total_cmp).unwrap();
+            a.iter().any(|&(_,(_,_,e))| e<E)
+        })
+        .map(|q| q.into_iter().map(|(p,_)| p)).flatten().collect()*/
+        quads.into_iter().map(|q| q.into_iter()).flatten().collect()
     } else {
         fn distance<T: TryFrom<u32>>(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[T]>> where T::Error: std::fmt::Debug {
             let size = image.size;
@@ -200,7 +250,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
             distance
         }
 
-        let mut points = match [false,true].try_map(|inverse| -> std::result::Result<_, Image<Box<[u32]>>> {
+        let points = match [false,true].try_map(|inverse| -> std::result::Result<_, Image<Box<[u32]>>> {
             let distance = distance::<u32>(image.as_ref(), threshold, inverse);
             if inverse!=black && debug=="distance" { return Err(distance) }
 
@@ -255,10 +305,10 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
         for points in &points { if points.is_empty() { return Result::Image(high_pass.unwrap()); } }
         for points in &points { assert!(!points.is_empty()); }
 
-        let black = if black { 0 } else { 1 };
-        const N : usize = 4*5+3*4;
+        //let black = if black { 0 } else { 1 };
+        //const N : usize = 4*5+3*4;
         //let all_points = points.clone();
-        let remove_isolated = |points: &mut [Vec<(vec2, u32)>; 2]| {
+        /*let remove_isolated = |points: &mut [Vec<(vec2, u32)>; 2]| {
             loop {
                 let isolation = [0,1].map(|i| minmax(points[i%2].iter().map(|a| points[[1,0][i%2]].iter().map(|b| vector::sq(a.0-b.0)).min_by(f32::total_cmp).unwrap())).unwrap());
                 let (i, isolation) = isolation.into_iter().enumerate().max_by(|(_, a), (_, b)| a.max.total_cmp(&b.max)).unwrap();
@@ -271,7 +321,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
                 //if points[i%2].len() ==
                 //if points.each_ref().map(Vec::len) != before { assert!(points[i%2].len() == before[i%2]-1); continue; } else { break; }
             }
-        };
+        };*/
         //remove_isolated(&mut points);
 
         /*return Result::Points([0,1].map(|i| {

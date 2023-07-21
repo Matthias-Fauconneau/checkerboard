@@ -7,38 +7,46 @@ mod image; use image::*;
 
 enum Result {
     Points([vec2; 4]),
-    Fit(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[vec2]>>, vec2, vec2)
+    Fit(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)
 }
 fn refine(image: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static str) -> Result {
     let mut target = Image::zero(image.size);
-    for y in 1..image.size.y-1 {
-        for x in 1..image.size.x-1 {
-            target[xy{x,y}] = (num::abs(image[xy{x:x-1,y:y-1}] as i32 + image[xy{x:x+1,y:y+1}] as i32 - (image[xy{x:x+1,y:y-1}] as i32 + image[xy{x:x-1,y:y+1}] as i32))/2) as u16;
+    {
+        const R : u32 = 3;
+        for y in R..image.size.y-R {
+            for x in R..image.size.x-R {
+                target[xy{x,y}] = (num::abs(image[xy{x:x-R,y:y-R}] as i32 + image[xy{x:x+R,y:y+R}] as i32 - (image[xy{x:x+R,y:y-R}] as i32 + image[xy{x:x-R,y:y+R}] as i32))/2) as u16;
+            }
         }
     }
-    let ref image = target;
+    let image = target;
 
     for _ in 0..1 {
-        let grid = Image::from_iter(xy{x:8,y:6},
-        (1..=6).map(|y|
-            (1..=8).map(move |x| {
-                let xy{x, y} = xy{x: x as f32/9., y: y as f32/7.};
-                let [A,B,C,D] = points.clone();
-                let p = y*(x*A+(1.-x)*B) + (1.-y)*(x*D+(1.-x)*C);
-                let p = xy{x: p.x.round() as u32, y: p.y.round() as u32,};
-                let (p,_) = (p.y-R..p.y+R).map(|y| (p.x-R..p.x+R).map(move |x| xy{x,y})).flatten().map(|p| (p, image[p])).max_by_key(|(_,v)| *v).unwrap_or((p,0));
-                p
-            }
+        let grid = {
+            let image = &image;
+            Image::from_iter(xy{x:8,y:6},
+                (1..=6).map(|y|
+                    (1..=8).map(move |x| {
+                        let xy{x, y} = xy{x: x as f32/9., y: y as f32/7.};
+                        let [A,B,C,D] = points.clone();
+                        let p = y*(x*A+(1.-x)*B) + (1.-y)*(x*D+(1.-x)*C);
+                        let p = xy{x: p.x.round() as u32, y: p.y.round() as u32,};
+                        let (p,_) = (p.y-R..p.y+R).map(|y| (p.x-R..p.x+R).map(move |x| xy{x,y})).flatten().map(|p| (p, image[p])).max_by_key(|(_,v)| *v).unwrap_or((p,0));
+                        p
+                    }
+                    )
+                ).flatten()
             )
-        ).flatten());
-        let rows = (0..grid.size.y).map(|y| (0..grid.size.x).map(move |x| grid[xy{x,y}]));
-        let columns = (0..grid.size.x).map(|x| (0..grid.size.y).map(move|y| grid[xy{x,y}]));
+        };
+        let ref ref_grid = grid;
+        let rows = (0..grid.size.y).map(|y| (0..grid.size.x).map(move |x| ref_grid[xy{x,y}]));
+        let columns = (0..grid.size.x).map(|x| (0..grid.size.y).map(move|y| ref_grid[xy{x,y}]));
         let column = rows.map(|row| row.map(|p| vec2::from(p)).sum::<vec2>()/8.).collect::<Box<_>>();
         let row = columns.map(|column| column.map(|p| vec2::from(p)).sum::<vec2>()/6.).collect::<Box<_>>();
         let row_axis = row.last().unwrap()-row[0];
         let column_axis = column.last().unwrap()-column[0];
         let center = grid.iter().map(|&p| vec2::from(p)).sum::<vec2>()/(8.*6.);
-        if debug != "" { return Result::Fit(center, row, column, grid, row_axis, column_axis); }
+        if debug != "" { return Result::Fit(center, row, column, grid, row_axis, column_axis, image); }
         points = [xy{x:-1./2.,y:-1./2.},xy{x:1./2.,y:-1./2.},xy{x:1./2.,y:1./2.},xy{x:-1./2.,y:1./2.}].map(|xy{x,y}| center + x*row_axis + y*column_axis);
     }
     Result::Points(points)
@@ -187,10 +195,10 @@ fn main() {
                     return Ok(());
                 }
                 checkerboard::Result::Checkerboard(points) => {
-                    let points = match refine(nir.as_ref(), points, 64, if self.debug_which=="nir" {self.debug} else{""}) {
+                    let points = match refine(nir.as_ref(), points, 128, if self.debug_which=="nir" {self.debug} else{""}) {
                         Result::Points(points) => points,
-                        Result::Fit(center, row, column, grid, row_axis, column_axis) => {
-                            let (_, scale, offset) = scale(target, nir.as_ref());
+                        Result::Fit(center, row, column, grid, row_axis, column_axis, corner) => {
+                            let (_, scale, offset) = scale(target, corner.as_ref());
                             cross(target, scale, offset, center, 0xFFFFFF);
                             for x in 0..grid.size.x {
                                 cross(target, scale, offset, row[x as usize], 0x00FF00);
@@ -222,8 +230,89 @@ fn main() {
                 }
             };
 
-            //if self.debug=="ir" { scale(target, ir.as_ref()); return Ok(()); }
-            let P_ir = match checkerboard(ir.as_ref(), false, if self.debug_which=="ir" {self.debug} else{""}) {
+            if self.debug_which=="ir" && ["original","source"].contains(&self.debug) { scale(target, ir.as_ref()); return Ok(()); }
+
+            let source = ir.as_ref();
+
+            // High pass
+            let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap();
+            let mut low_then_high = transpose_low_pass_1D::<16>(transpose_low_pass_1D::<16>(source.as_ref()).as_ref());
+            if !(min < max) { return Ok(()); }
+            low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
+            let source = low_then_high;
+
+            let source = {
+                let mut target = Image::zero(source.size);
+                {
+                    const R : u32 = 3;
+                    for y in R..source.size.y-R {
+                        for x in R..source.size.x-R {
+                            target[xy{x,y}] = (num::abs(source[xy{x:x-R,y:y-R}] as i32 + source[xy{x:x+R,y:y+R}] as i32 - (source[xy{x:x+R,y:y-R}] as i32 + source[xy{x:x-R,y:y+R}] as i32))/2) as u16;
+                        }
+                    }
+                }
+                target
+            };
+    
+            let mut points = Vec::new();
+            //let max = {
+                const R : u32 = 12;
+                //let mut target = Image::zero(source.size);
+                for y in R..source.size.y-R { for x in R..source.size.x-R {
+                    let center = source[xy{x, y}];
+                    if center < 4096 { continue; }
+                    let mut flat = 0;
+                    if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+                        if (dx,dy) == (0,0) { continue; }
+                        if source[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] > center { return false; }
+                        if source[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] == center { flat += 1; }
+                    }} true})() { 
+                        //target[xy{x,y}] = center; 
+                        points.push(xy{x,y});
+                    }
+                }}
+                //target
+            //};
+            /*let mut max = max;
+            let mut points = Vec::new();
+            let R : u32 = 12; // Merges close peaks (top left first)
+            for y in R..max.size.y-R { for x in R..max.size.x-R {
+                let value = max[xy{x,y}];
+                if value == 0 { continue; }
+                let mut flat = 0;
+                let mut sum : uint2 = num::zero();
+                for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+                    let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
+                    if max[p] == 0 { continue; }
+                    flat += 1;
+                    sum += p;
+                }}
+                points.push( (vec2::from(int2::from(xy{x,y}+sum))/((1+flat) as f32), value) );
+                for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+                    let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
+                    max[p] = 0; // Merge small flat plateaus as single point
+                }}
+            }}*/
+
+            //let points = points.iter().map(|(a,_)| (*a, points.iter().filter(|(b,_)| a!=b).map(|&(b,_)| (b, vector::sq(b-a))).min_by(|(_,a),(_,b)| f32::total_cmp(a, b)).unwrap().0));
+            let (_, scale, offset) = scale(target, source.as_ref());
+            if points.len() < 3 { return Ok(()); }
+            let points : Vec<_> = points.iter().map(|(a,_)| (*a, {
+                //points.iter().filter(|(b,_)| a!=b).map(|&(b,_)| (b, vector::sq(b-a))).min_by(|(_,a),(_,b)| f32::total_cmp(a, b)).unwrap().0
+                let mut p = points.iter().filter(|(b,_)| a!=b).copied().collect::<Box<_>>();
+                let (closest, _, _) = p.select_nth_unstable_by(3, |(p0,_),(p1,_)| f32::total_cmp(&vector::sq(p0-a),&vector::sq(p1-a)));
+                <[(vec2, u16); 3]>::try_from(closest).unwrap().map(|(p,_)| (vector::sq(p-a)<32.*32.).then_some(p))
+            })).collect();
+
+
+            //assert!(!points.is_empty());
+            for (a, neighbours) in points { 
+                cross(target, scale, offset, a, 0xFF00FF); 
+                for p in neighbours { if let Some(p) = p { for (p,_,_,_) in ui::line::generate_line(target.size, [vec2::from(offset)+scale*a,vec2::from(offset)+scale*p]) { target[p] = 0xFFFF; } } }
+            }
+            return Ok(());
+    
+            /*let P_ir = match checkerboard(ir.as_ref(), false, if self.debug_which=="ir" {self.debug} else{""}) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 /*checkerboard::Result::Points(points) => {
                     let (_, scale, offset) = scale(target, ir.as_ref());
@@ -243,10 +332,10 @@ fn main() {
                 }
                 //checkerboard::Result::Checkerboard(points) => {
                 checkerboard::Result::Checkerboard(points) => {
-                    let points = match refine(nir.as_ref(), points, 6, if self.debug_which=="ir" {self.debug} else{""}) {
+                    let points = match refine(ir.as_ref(), points, 6, if self.debug_which=="ir" {self.debug} else{""}) {
                         Result::Points(points) => points,
-                        Result::Fit(center, row, column, grid, row_axis, column_axis) => {
-                            let (_, scale, offset) = scale(target, nir.as_ref());
+                        Result::Fit(center, row, column, grid, row_axis, column_axis, corner) => {
+                            let (_, scale, offset) = scale(target, corner.as_ref());
                             cross(target, scale, offset, center, 0xFFFFFF);
                             for x in 0..grid.size.x {
                                 cross(target, scale, offset, row[x as usize], 0x00FF00);
@@ -281,7 +370,7 @@ fn main() {
                     }
                     points
                 }
-            };
+            };*/
 
             /*#[cfg(feature="opencv")] let P_ir = {
                 let mut corners = opencv::core::Mat::default();
@@ -295,7 +384,7 @@ fn main() {
                 panic!("{corners:?}")
             };*/
 
-            let P = [P_nir, P_ir]; //P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
+            /*let P = [P_nir, P_ir]; //P[1] = [P[1][0], P[1][3], P[1][1], P[1][2]];
             let M = P.map(|P| {
                 let center = P.into_iter().sum::<vec2>() / P.len() as f32;
                 let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();
@@ -311,7 +400,7 @@ fn main() {
             for (i,&p) in P_nir.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
             for (i,&p) in P_ir.iter().enumerate() { cross(target, IR_scale, IR_offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
             affine_blit(target, target_size, ir.as_ref(), A, nir.size);
-            Ok(())
+            Ok(())*/
         }
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {
             use ui::Event::Key;
@@ -327,10 +416,12 @@ fn main() {
                 Key('l') =>{ self.debug = "low"; return Ok(true); }
                 Key('m') =>{ self.debug = "max"; return Ok(true); }
                 Key('n') =>{ self.debug_which = "nir"; return Ok(true); }
-                Key('o')|Key(' ')|Key('\n') =>{ self.debug = "checkerboard"; return Ok(true); }
+                Key('o') =>{ self.debug = "original"; return Ok(true); }
+                Key(' ')|Key('\n') =>{ self.debug = "checkerboard"; return Ok(true); }
                 Key('p') =>{ self.debug = "peaks"; return Ok(true); }
                 Key('q') =>{ self.debug = "quads"; return Ok(true); }
-                Key('s') =>{ self.debug = "selection"; return Ok(true); }
+                //Key('s') =>{ self.debug = "selection"; return Ok(true); }
+                Key('s') =>{ self.debug = "source"; return Ok(true); }
                 Key('⎙')|Key('\u{F70C}')/*|Key(' ')*/ => {
                     println!("⎙");
                     if self.last_frame.iter_mut().zip(["nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| std::fs::write(name, &bytemuck::cast_slice(image)).unwrap()).count() == 0 {
@@ -348,5 +439,5 @@ fn main() {
             Ok(/*self.nir.is_some()||self.ir.is_some()*/true)
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"checkerboard", debug_which: "nir"}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"quads", debug_which: "ir"}).unwrap();
 }
