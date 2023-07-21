@@ -30,9 +30,12 @@ fn refine(source: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static 
         let grid = {
             let image = &image;
             Image::from_iter(xy{x:8,y:6},
-                (1..=6).map(|y|
+          (1..=6).map(|y|
                     (1..=8).map(move |x| {
                         let xy{x, y} = xy{x: x as f32/9., y: y as f32/7.};
+                /*(0..6).map(|y|
+                    (0..8).map(move |x| {
+                        let xy{x, y} = xy{x: x as f32/7., y: y as f32/5.};*/
                         let [A,B,C,D] = points.clone();
                         let p = y*(x*A+(1.-x)*B) + (1.-y)*(x*D+(1.-x)*C);
                         let p = xy{x: p.x.round() as u32, y: p.y.round() as u32,};
@@ -181,6 +184,8 @@ fn main() {
                 for dx in -64..64 { plot(dx, 0); }
             }
 
+            if self.debug_which=="nir" && ["original","source"].contains(&self.debug) { scale(target, nir.as_ref()); return Ok(()); }
+
             let P_nir = match checkerboard(nir.as_ref(), true, if self.debug_which=="nir" {self.debug} else{""}) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 /*checkerboard::Result::Points(points) => {
@@ -200,7 +205,7 @@ fn main() {
                     return Ok(());
                 }
                 checkerboard::Result::Checkerboard(points) => {
-                    let points = match refine(nir.as_ref(), points, 128, if self.debug_which=="nir" {self.debug} else{""}) {
+                    let points = match refine(nir.as_ref(), points, 0/*128*/, if self.debug_which=="nir" {self.debug} else{""}) {
                         Result::Points(points) => points,
                         Result::Fit(center, row, column, grid, row_axis, column_axis, corner) => {
                             let (_, scale, offset) = scale(target, corner.as_ref());
@@ -235,9 +240,54 @@ fn main() {
                 }
             };
 
+            let quad = |points:&[uint2]| {
+                if points.len() < 4 { return None; }
+                let mut Q : Vec<_> = points.iter().map(|&uint2| vec2::from(uint2)).collect();
+                while Q.len() > 4 {
+                    Q.remove(((0..Q.len()).map(|i| {
+                        let [p0, p1, p2]  = std::array::from_fn(|j| Q[(i+j)%Q.len()]);
+                        (vector::cross2(p2-p0, p1-p0), i)
+                    }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%Q.len());
+                }
+                let i0 = Q.iter().enumerate().min_by(|(_,a),(_,b)| (a.x+a.y).total_cmp(&(b.x+b.y))).unwrap().0; // top left
+                let mut Q = [0,1,2,3].map(|i|Q[(i0+i)%4]);
+            
+                // First edge is long edge
+                use vector::norm;
+                if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); }
+                Some(Q)
+            };
+        
+            /*let points = match checkerboard(nir.as_ref(), 256, if self.debug_which=="nir" {self.debug} else{""}) {
+                Ok(points) => points,
+                Err(image) => {scale(target, image.as_ref()); return Ok(());},
+            };
+            if self.debug_which=="nir" && self.debug=="points" {
+                let (_, scale, offset) = scale(target, nir.as_ref());
+                for &a in &points { cross(target, scale, offset, a.into(), 0xFF00FF); }
+                let mx = points.iter().map(|&p| p.x as f64).sum::<f64>() / points.len() as f64;
+                let my = points.iter().map(|&p| p.y as f64).sum::<f64>() / points.len() as f64;
+                let sxx = points.iter().map(|&p| num::sq(p.x as f64 - mx)).sum::<f64>() / points.len() as f64;
+                let syy = points.iter().map(|&p| num::sq(p.y as f64 - my)).sum::<f64>() / points.len() as f64;
+                let sxy = points.iter().map(|&p| (p.x as f64 - mx)*(p.y as f64 - my)).sum::<f64>() / points.len() as f64;
+                let b1 = (syy-sxx+num::sqrt(num::sq(syy-sxx)+4.*num::sq(sxy)))/(2.*sxy);
+                let b0 = my - b1*mx;
+                let a = xy{x:0., y: b0};
+                let b = xy{x:nir.size.x as f64, y: b0+b1*nir.size.x as f64};
+                for (p,_,_,_) in ui::line::generate_line(target.size, [vec2::from(offset)+scale*a.map(|f64| f64 as f32),vec2::from(offset)+scale*b.map(|f64| f64 as f32)]) { 
+                    if let Some(p) = target.get_mut(p) { *p = 0xFFFF; }
+                }
+                return Ok(());
+            }
+            let Some(P_nir) = quad(&points) else {
+                let (_, scale, offset) = scale(target, nir.as_ref());
+                for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); }
+                return Ok(())
+            };*/
+            
             if self.debug_which=="ir" && ["original","source"].contains(&self.debug) { scale(target, ir.as_ref()); return Ok(()); }
 
-            let source = ir.as_ref();
+            /*let source = ir.as_ref();
 
             // High pass
             let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap();
@@ -339,24 +389,95 @@ fn main() {
                     //for p in neighbours { if let Some(p) = p { for (p,_,_,_) in ui::line::generate_line(target.size, [vec2::from(offset)+scale*vec2::from(a),vec2::from(offset)+scale*vec2::from(p)]) { target[p] = 0xFFFF; } } }
                 }
                 return Ok(());
+            }*/
+
+            let points = match checkerboard2(ir.as_ref(), 32, if self.debug_which=="ir" {self.debug} else{""}) {
+                Ok(points) => points,
+                Err(image) => {scale(target, image.as_ref()); return Ok(());},
+            };
+
+            if self.debug_which=="ir" && self.debug=="points" {
+                let (_, scale, offset) = scale(target, ir.as_ref());
+                for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); }
+                return Ok(())
             }
 
-            let mut Q : Vec<_> = points.iter().map(|&uint2| vec2::from(uint2)).collect();
-            while Q.len() > 4 {
-                Q.remove(((0..Q.len()).map(|i| {
-                    let [p0, p1, p2]  = std::array::from_fn(|j| Q[(i+j)%Q.len()]);
-                    (vector::cross2(p2-p0, p1-p0), i)
-                }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%Q.len());
+            /*let mx = points.iter().map(|&p| p.x as f64).sum::<f64>() / points.len() as f64;
+            let my = points.iter().map(|&p| p.y as f64).sum::<f64>() / points.len() as f64;
+            let sxx = points.iter().map(|&p| num::sq(p.x as f64 - mx)).sum::<f64>() / points.len() as f64;
+            let syy = points.iter().map(|&p| num::sq(p.y as f64 - my)).sum::<f64>() / points.len() as f64;
+            let sxy = points.iter().map(|&p| (p.x as f64 - mx)*(p.y as f64 - my)).sum::<f64>() / points.len() as f64;
+            let b1 = (syy-sxx+num::sqrt(num::sq(syy-sxx)+4.*num::sq(sxy)))/(2.*sxy);
+            let b0 = my - b1*mx;
+            //y=b0+b1*x
+            let O = xy{x:0., y: b0};
+            let D = vector::normalize(xy{x:1., y: b1});
+            let vector::MinMax{min, max} = vector::minmax(points.iter().map(|&p| vector::dot(D, p.map(|u32| u32 as f64)-O))).unwrap();
+            let line = {
+                let a = O+min*D;
+                let b = O+max*D;
+                [a,b]
+            };
+            let D = xy{x: -D.y, y: D.x};
+            let vector::MinMax{min, max} = vector::minmax(points.iter().map(|&p| vector::dot(D, p.map(|u32| u32 as f64)-O))).unwrap();
+            {
+                let a = O+min*D;
+                let b = O+max*D;
+                let (_, scale, offset) = scale(target, ir.as_ref());
+                {let [a,b] = line; for (p,_,_,_) in ui::line::generate_line(target.size, [vec2::from(offset)+scale*a.map(|f64| f64 as f32), vec2::from(offset)+scale*b.map(|f64| f64 as f32)]) { target[p] = 0xFFFF; }}
+                for (p,_,_,_) in ui::line::generate_line(target.size, [vec2::from(offset)+scale*a.map(|f64| f64 as f32), vec2::from(offset)+scale*b.map(|f64| f64 as f32)]) { 
+                    if let Some(p) = target.get_mut(offset+p) { *p = 0xFFFF; }
+                }
+                return Ok(());
+            }*/
+
+            let area = |[a,b,c,d]:[vec2; 4]| {let abc = vector::cross2(b-a,c-a); /*if abc<0. {continue;}*/ let cda = vector::cross2(d-c,a-c); /*if cda<0. {continue;}*/ (abc+cda)/2.};
+
+            use std::f32::consts::PI;
+            let P_ir = [0./*,PI/2.*/].map(|_angle| {
+                // TODO: rotate
+                let vector::MinMax{min, max} = vector::minmax(points.iter().map(|p| p.map(|u32| u32 as f32))).unwrap();    
+                [xy{x: min.x, y: min.y}, xy{x: max.x, y: min.y}, xy{x: max.x, y: max.y}, xy{x: min.x, y: max.y}]
+                // TODO: rotate back
+            }).into_iter().min_by(|&a,&b| f32::total_cmp(&area(a), &area(b))).unwrap();
+            /*let Some(P_ir) = quad(&points) else {
+                let (_, scale, offset) = scale(target, ir.as_ref());
+                for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); }
+                return Ok(())
+            };
+
+            let points = match refine(ir.as_ref(), P_ir, 6, if self.debug_which=="ir" {self.debug} else{""}) {
+                Result::Points(points) => points,
+                Result::Fit(center, row, column, grid, row_axis, column_axis, corner) => {
+                    let (_, scale, offset) = scale(target, corner.as_ref());
+                    cross(target, scale, offset, center, 0xFFFFFF);
+                    for x in 0..grid.size.x {
+                        cross(target, scale, offset, row[x as usize], 0x00FF00);
+                    }
+                    for y in 0..grid.size.y {
+                        cross(target, scale, offset, column[y as usize], 0x00FF00);
+                        for x in 0..grid.size.x {
+                            cross(target, scale, offset, grid[xy{x,y}].into(), 0x00FFFF);
+                            let xy{x, y} = xy{x: x as f32/7.,  y: y as f32/5.};
+                            //assert!(x >= 0. && x <= 1., "{x}");
+                            //assert!(y >= 0. && y <= 1., "{y}");
+                            let xy{x, y} = xy{x: x-1./2., y: y-1./2.};
+                            //assert!(x >= -1./2. && x <= 1./2., "{x}");
+                            //assert!(y >= -1./2. && y <= 1./2., "{y}");
+                            let p = center + x*row_axis + y*column_axis;
+                            cross(target, scale, offset, p, 0xFF00FF); // purple
+                        }
+                    }
+                    return Ok(());
+                }
+            };*/
+
+            if self.debug_which=="ir" && self.debug=="quads" {
+                let (_, scale, offset) = scale(target, ir.as_ref());
+                for a in P_ir { cross(target, scale, offset, a, 0xFF00FF); }
+                return Ok(())
             }
-            let i0 = Q.iter().enumerate().min_by(|(_,a),(_,b)| (a.x+a.y).total_cmp(&(b.x+b.y))).unwrap().0; // top left
-            let mut Q = [0,1,2,3].map(|i|Q[(i0+i)%4]);
-        
-            // First edge is long edge
-            use vector::norm;
-            if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); }
-        
-            let P_ir = Q;
-        
+            
             /*let P_ir = match checkerboard(ir.as_ref(), false, if self.debug_which=="ir" {self.debug} else{""}) {
                 checkerboard::Result::Image(image) => { scale(target, image.as_ref()); return Ok(()); }
                 /*checkerboard::Result::Points(points) => {
@@ -452,7 +573,8 @@ fn main() {
             match event {
                 Key('a') =>{ self.debug = ""; return Ok(true); }
                 Key('b') =>{ self.debug = "binary"; return Ok(true); }
-                Key('c') =>{ self.debug = "contour"; return Ok(true); }
+                Key('c') if self.debug_which=="nir" =>{ self.debug = "contour"; return Ok(true); }
+                Key('c') if self.debug_which=="ir" =>{ self.debug = "cross"; return Ok(true); }
                 Key('d') =>{ self.debug = "distance"; return Ok(true); }
                 Key('e') =>{ self.debug = "erode"; return Ok(true); }
                 Key('f') =>{ self.debug = "filtered"; return Ok(true); }
@@ -464,7 +586,8 @@ fn main() {
                 Key('o') =>{ self.debug = "original"; return Ok(true); }
                 Key(' ') =>{ self.debug = "checkerboard"; return Ok(true); }
                 Key('\n') => { self.debug_which=""; return Ok(true); }
-                Key('p') =>{ self.debug = "peaks"; return Ok(true); }
+                //Key('p') =>{ self.debug = "peaks"; return Ok(true); }
+                Key('p') =>{ self.debug = "points"; return Ok(true); }
                 Key('q') =>{ self.debug = "quads"; return Ok(true); }
                 //Key('s') =>{ self.debug = "selection"; return Ok(true); }
                 Key('s') =>{ self.debug = "source"; return Ok(true); }
@@ -485,5 +608,5 @@ fn main() {
             Ok(/*self.nir.is_some()||self.ir.is_some()*/true)
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"", debug_which: "nir"}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"checkerboard", debug_which: "nir"}).unwrap();
 }

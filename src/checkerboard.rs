@@ -32,7 +32,7 @@ pub fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[
     transpose
 }
 
-/*pub enum Result {
+pub enum Result {
     Checkerboard([vec2; 4]),
     Image(Image<Box<[u16]>>),
     //Points(Vec<vec2>),
@@ -57,7 +57,16 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
         };
         if !(min < max) { return Result::Image(low_then_high); }
         if debug=="low" { return Result::Image(low_then_high); }
-        low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
+        //low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
+        low_then_high.as_mut().zip_map(&source, |&low, &p| {
+            //let sub = (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16;
+            let high = (p-min) as u32*0xFFFF/(max-min) as u32;
+            assert!(high <= 0xFFFF);
+            let low = low.max(0x1000);
+            let div = ((high*0xFFFF/low as u32)>>4) as u16;
+            //((sub as u32+div as u32)/2) as u16
+            div
+        });
         if debug=="high" { return Result::Image(low_then_high); }
         high_pass = Some(low_then_high);
         high_pass.as_ref().unwrap().as_ref()
@@ -98,7 +107,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
             false => if p<threshold { 0xFF } else { 0 }
         }));
         let mut erode = Image::zero(binary8.size);
-        for i in 0..if black {6} else {/*2*/4} {
+        for i in 0..if black {/*6*/9} else {/*2*/4} {
             for y in 1..erode.size.y-1 {
                 for x in 1..erode.size.x-1 {
                     let p = |dx, dy| binary8[xy{x:(x as i32+dx) as u32,y: (y as i32+dy) as u32}];
@@ -426,17 +435,31 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
     //if toggle && black==1 { return Result::Points(if black==1 {[Vec::new(), Q.iter().map(|&p| (p,0)).collect()]}else{[Q.iter().map(|&p| (p,0)).collect(), Vec::new()]}, high_pass); }
     //Result::Checkerboard(Q.try_into().unwrap())
     //Result::Checkerboard(Q)
+}
+
+/*pub enum Result {
+    Image(Image<Box<[u16]>>),
+    Points(Vec<uint2>),
 }*/
 
-pub fn checkerboard(image: Image<&[u16]>) -> Vec<uint2> {
+pub fn checkerboard2(source: Image<&[u16]>, max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
     // High pass
     let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap();
     let mut low_then_high = transpose_low_pass_1D::<16>(transpose_low_pass_1D::<16>(source.as_ref()).as_ref());
-    if !(min < max) { return Ok(()); }
-    low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
+    if debug=="low" { return Err(low_then_high); }
+    if !(min < max) { return Err(low_then_high); }
+    //low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
+    low_then_high.as_mut().zip_map(&source, |&low, &p| {
+        //let sub = (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16;
+        let high = (p-min) as u32*0xFFFF/(max-min) as u32;
+        assert!(high <= 0xFFFF);
+        let low = low.max(0x2000);
+        let div = ((high*0xFFFF/low as u32)>>3) as u16;
+        //((sub as u32+div as u32)/2) as u16
+        div
+    });
+    if debug=="high" { return Err(low_then_high); }
     let source = low_then_high;
-
-    if self.debug_which=="ir" && ["high"].contains(&self.debug) { scale(target, source.as_ref()); return Ok(()); }
 
     let source = {
         let mut target = Image::zero(source.size);
@@ -455,16 +478,45 @@ pub fn checkerboard(image: Image<&[u16]>) -> Vec<uint2> {
         }
         target
     };
+    if debug=="cross" { return Err(source); }
 
     let source = transpose_low_pass_1D::<1>(transpose_low_pass_1D::<1>(source.as_ref()).as_ref());
+    if debug=="low" { return Err(source); }
+
+    assert!(source.len() < 1<<24);
+    let mut histogram : [u32; 65536] = [0; 65536];
+    for &pixel in source.iter() { histogram[pixel as usize] += 1; }
+    type u40 = u64;
+    let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
+    let mut threshold : u16 = 0;
+    let mut maximum_variance = 0;
+    type u24 = u32;
+    let (mut background_count, mut background_sum) : (u24, u40)= (0, 0);
+    let mut foreground_mean : u16 = 0;
+    for (i, &count) in histogram.iter().enumerate() {
+        background_count += count;
+        if background_count == 0 { continue; }
+        if background_count as usize == source.len() { break; }
+        background_sum += i/*16*/ as u40 * count/*24*/ as u40;
+        let foreground_count : u24 = source.len() as u24 - background_count;
+        let foreground_sum : u40 = sum - background_sum;
+        type u48 = u64;
+        let variance = sq((foreground_sum as u64*background_count as u64 - background_sum as u64*foreground_count as u64) as u128)
+                            / (foreground_count as u48*background_count as u48) as u128;
+        if variance >= maximum_variance { (threshold, maximum_variance, foreground_mean) = (i as u16, variance, (foreground_sum/foreground_count as u40) as u16); }
+    }
+    //let foreground_mode = threshold+histogram[threshold as usize..].iter().enumerate().max_by_key(|(_, &v)| v).unwrap().0 as u16;
+    //assert!(foreground_mode < foreground_mean);
+    let threshold = foreground_mean; //(threshold+foreground_mean)/2;
+    if debug=="binary" { return Err(Image::from_iter(source.size, source.iter().map(|&p| if p>threshold { p } else { 0 }))); }
 
     let mut points = Vec::new();
     //let max = {
-        const R : u32 = 12;
+        const R : u32 = 12;//128
         //let mut target = Image::zero(source.size);
         for y in R..source.size.y-R { for x in R..source.size.x-R {
             let center = source[xy{x, y}];
-            if center < 16384 { continue; }
+            if center < threshold { continue; }
             let mut flat = 0;
             if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
                 if (dx,dy) == (0,0) { continue; }
@@ -499,16 +551,16 @@ pub fn checkerboard(image: Image<&[u16]>) -> Vec<uint2> {
     }}*/
 
     //let points = points.iter().map(|(a,_)| (*a, points.iter().filter(|(b,_)| a!=b).map(|&(b,_)| (b, vector::sq(b-a))).min_by(|(_,a),(_,b)| f32::total_cmp(a, b)).unwrap().0));
-    if points.len() < 4 { return Ok(()); }
+    if points.len() < 4 { return Err(source); }
     let points : Vec<_> = points.iter().map(|&a| (a, {
         //points.iter().filter(|(b,_)| a!=b).map(|&(b,_)| (b, vector::sq(b-a))).min_by(|(_,a),(_,b)| f32::total_cmp(a, b)).unwrap().0
         let mut p = points.iter().filter(|&b| a!=*b).copied().collect::<Box<_>>();
         assert!(p.len() >= 3);
         let closest = if p.len() > 3 { let (closest, _, _) = p.select_nth_unstable_by_key(3, |p| vector::sq(p-a)); &*closest } else { &p };
-        <[uint2; 3]>::try_from(closest).unwrap().map(|p| (vector::sq(p-a)<32*32).then_some(p))
+        <[uint2; 3]>::try_from(closest).unwrap().map(|p| (vector::sq(p-a)<sq(max_distance)).then_some(p))
     })).collect();
 
-    points.iter().map(|&p| {
+    Ok(points.iter().map(|&p| {
         let mut connected = Vec::new();
         fn walk(points: &[(uint2, [Option<uint2>; 3])], mut connected: &mut Vec<uint2>, (p, neighbours): (uint2, [Option<uint2>; 3])) {
             if !connected.contains(&p) {
@@ -518,5 +570,5 @@ pub fn checkerboard(image: Image<&[u16]>) -> Vec<uint2> {
         }
         walk(&points, &mut connected, p);
         connected
-    }).max_by_key(|g| g.len()).unwrap()
+    }).max_by_key(|g| g.len()).unwrap())
 }
