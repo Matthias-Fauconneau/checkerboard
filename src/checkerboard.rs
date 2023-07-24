@@ -313,3 +313,14 @@ pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usi
         }
     }
 }
+
+pub fn fit_rectangle(points: &[uint2]) -> [vec2; 4] {
+    let area = |[a,b,c,d]:[vec2; 4]| {let abc = vector::cross2(b-a,c-a); let cda = vector::cross2(d-c,a-c); (abc+cda)/2.};
+    use std::f32::consts::PI;
+    [0./*,PI/2.*/].map(|_angle| {
+        // TODO: rotate
+        let vector::MinMax{min, max} = vector::minmax(points.iter().map(|p| p.map(|u32| u32 as f32))).unwrap();    
+        [xy{x: min.x, y: min.y}, xy{x: max.x, y: min.y}, xy{x: max.x, y: max.y}, xy{x: min.x, y: max.y}]
+        // TODO: rotate back
+    }).into_iter().min_by(|&a,&b| f32::total_cmp(&area(a), &area(b))).unwrap()
+}
