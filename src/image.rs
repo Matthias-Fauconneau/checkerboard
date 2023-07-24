@@ -141,15 +141,20 @@ pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image
     (scale, offset)
 }
 
-pub fn open(path: impl AsRef<std::path::Path>) -> Image<Box<[u16]>> {
+pub fn write_raw(name: &str, image: Image<&[u16]>) { std::fs::write(format!("{name}.{}x{}",image.size.x, image.size.y), &bytemuck::cast_slice(&image)).unwrap() }
+fn cast_slice_box<A,B>(input: Box<[A]>) -> Box<[B]> { // ~bytemuck but allows unequal align size
+    unsafe{Box::<[B]>::from_raw({let len=std::mem::size_of::<A>() * input.len() / std::mem::size_of::<B>(); core::slice::from_raw_parts_mut(Box::into_raw(input) as *mut B, len)})}
+}
+pub fn raw(name: &str, size: uint2) -> Option<Image<Box<[u16]>>> { Some(Image::new(size, cast_slice_box(std::fs::read(format!("{name}.{}x{}",size.x,size.y)).ok()?.into_boxed_slice()))) }
+
+pub fn write(path: impl AsRef<std::path::Path>, target: Image<&[u32]>) {
+    #[cfg(not(feature="png"))] unimplemented!();
+    #[cfg(feature="png")] png::save_buffer(path, bytemuck::cast_slice(&target.data), target.size.x, target.size.y, png::ColorType::Rgba8).unwrap();
+}
+/*pub fn open(path: impl AsRef<std::path::Path>) -> Image<Box<[u16]>> {
     #[cfg(not(feature="png"))] unimplemented!();
     #[cfg(feature="png")] {
         let image = png::open(path).unwrap();
         Image::new(vector::xy{x: image.width(), y: image.height()}, image.into_luma8().into_raw().into_boxed_slice().iter().map(|&u8| u8 as u16).collect())
     }
-}
-
-fn cast_slice_box<A,B>(input: Box<[A]>) -> Box<[B]> { // ~bytemuck but allows unequal align size
-    unsafe{Box::<[B]>::from_raw({let len=std::mem::size_of::<A>() * input.len() / std::mem::size_of::<B>(); core::slice::from_raw_parts_mut(Box::into_raw(input) as *mut B, len)})}
-}
-pub fn raw(size: uint2, path: impl AsRef<std::path::Path>) -> Image<Box<[u16]>> { Image::new(size, cast_slice_box(std::fs::read(path).unwrap().into_boxed_slice())) }
+}*/

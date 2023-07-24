@@ -18,5 +18,7 @@ png={package='image',version='*',default-features=false,features=['png'],optiona
 imageproc='*'
 itertools='*'
 ffmpeg={version='*', package='ffmpeg-next', default-features=false, features=['codec','format']} #'static',
+[patch.'https://github.com/Matthias-Fauconneau/image']
+image={path='../image'}
 [patch.'https://github.com/Matthias-Fauconneau/ui']
 ui={path='../ui'}

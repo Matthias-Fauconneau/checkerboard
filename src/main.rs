@@ -4,12 +4,22 @@ use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}};
 mod checkerboard; use checkerboard::*;
 mod matrix; use matrix::*;
 mod image; use image::*;
+
+pub trait Camera : Sized {
+    fn new() -> Self;
+    fn next(&mut self) -> Image<Box<[u16]>>;
+    fn next_or_saved_or_start(camera: &mut Option<Self>, clone: &mut Option<Image<Box<[u16]>>>, name: &str, size: size) -> Image<Box<[u16]>> {
+        if let Some(camera) = camera.as_mut() {let image = camera.next(); *clone = Some(image.clone()); image} 
+        else if let Some(image) = raw(name,size) { image }
+        else { *camera = Some(Self::new()); let image = camera.as_mut().unwrap().next(); *clone = Some(image.clone()); image}
+    }
+}
 mod hololens; use hololens::*;
 mod nir; use nir::*;
 mod ir; use ir::*;
 
 fn main() {
-    let hololens = /*std::env::args().any(|a| a=="hololens").*/true.then(Hololens::new);
+    let hololens = std::env::args().any(|a| a=="hololens").then(Hololens::new);
     let nir = std::env::args().any(|a| a=="nir").then(NIR::new);    
     let ir = std::env::args().any(|a| a=="ir").then(IR::new);
 
@@ -18,27 +28,52 @@ fn main() {
         nir: Option<NIR>,
         ir: Option<IR>,
         last_frame: [Option<Image<Box<[u16]>>>; 3],
-        debug: &'static str,
         debug_which: &'static str,
+        debug: &'static str,
     }
     impl ui::Widget for View {
-        fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
+        fn size(&mut self, _: size) -> size { xy{x:1280,y:720} }
         fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
-            let hololens = self.hololens.as_mut().map(|hololens| {let hololens = hololens.next(); self.last_frame[0] = Some(hololens.clone()); hololens}).unwrap_or_else(||open("hololens.png"));
-            if self.debug_which=="hololens" && ["original","source"].contains(&self.debug) { scale(target, hololens.as_ref()); return Ok(()) }
-            let Some(P_hololens) = checkerboard_quad_debug(hololens.as_ref(), true, if self.debug_which=="hololens" {self.debug} else{""}, target)  else { return Ok(()) };
-
-            let nir = self.nir.as_mut().map(|nir|{let nir = nir.next(); self.last_frame[1] = Some(nir.clone()); nir}).unwrap_or_else(||open("nir.png"));
-            if self.debug_which=="nir" && ["original","source"].contains(&self.debug) { scale(target, nir.as_ref()); return Ok(()) }
-            let Some(P_nir) = checkerboard_quad_debug(nir.as_ref(), true, if self.debug_which=="nir" {self.debug} else{""}, target)  else { return Ok(()) };
-
-            let ir = self.ir.as_mut().map(|ir|{let ir = ir.next(); self.last_frame[2] = Some(ir.clone()); ir}).unwrap_or_else(||raw(xy{x:256,y:192}, "ir"));
-            if self.debug_which=="ir" && ["original","source"].contains(&self.debug) { scale(target, ir.as_ref()); return Ok(()); }
-            let points = match checkerboard_direct_intersections(ir.as_ref(), 32, if self.debug_which=="ir" {self.debug} else{""}) {
+            
+            let hololens = Camera::next_or_saved_or_start(&mut self.hololens,&mut self.last_frame[0], "hololens",xy{x:1280,y:720});
+            let debug = if self.debug_which=="hololens" {self.debug} else{""};
+            if debug=="original" { scale(target, hololens.as_ref()); return Ok(()) }
+            //let Some(P_hololens) = checkerboard_quad_debug(hololens.as_ref(), true, 3, 20., if self.debug_which=="hololens" {self.debug} else{""}, target)  else { return Ok(()) };
+            let points = match checkerboard_direct_intersections(hololens.as_ref(), 64, debug) {
                 Ok(points) => points,
                 Err(image) => {scale(target, image.as_ref()); return Ok(()) }
             };
-            if self.debug_which=="ir" && self.debug=="points" {
+            if debug=="points" {
+                let (_, scale, offset) = scale(target, hololens.as_ref());
+                for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); }
+                return Ok(())
+            }
+            let P_hololens = long_edge_first(top_left_first(simplify(convex_hull(&points.into_iter().map(vec2::from).collect::<Box<_>>())).try_into().unwrap()));
+            if debug=="quads" {
+                let (_, scale, offset) = scale(target, hololens.as_ref());
+                for a in P_hololens { cross(target, scale, offset, a, 0xFF00FF); }
+                return Ok(())
+            }
+
+            let nir = Camera::next_or_saved_or_start(&mut self.nir, &mut self.last_frame[1], "nir",xy{x:2592,y:1944});
+            let debug = if self.debug_which=="nir" {self.debug} else{""};
+            if debug=="original" { scale(target, nir.as_ref()); return Ok(()) }
+            let low = low_pass(nir.as_ref(), 4/*12*/);
+            
+            if debug=="low" { scale(target, low.as_ref()); return Ok(()) }
+            let Some(high) = self::high_pass(low.as_ref(), 42/*127*/, 0x1000) else { scale(target, low.as_ref()); return Ok(()) };
+            if debug=="high" { scale(target, high.as_ref()); return Ok(()) }        
+            let Some(P_nir) = checkerboard_quad_debug(nir.as_ref(), true, 9, 64., debug, target)  else { return Ok(()) };
+
+            let ir = Camera::next_or_saved_or_start(&mut self.ir, &mut self.last_frame[2], "ir",xy{x:256,y:192});
+            let debug = if self.debug_which=="ir" {self.debug} else{""};
+            if debug=="original" { scale(target, ir.as_ref()); return Ok(()); }
+            let Some(high) = self::high_pass(ir.as_ref(), 16, 0x2000) else { scale(target, ir.as_ref()); return Ok(()); };
+            let points = match checkerboard_direct_intersections(high.as_ref(), 32, debug) {
+                Ok(points) => points,
+                Err(image) => {scale(target, image.as_ref()); return Ok(()) }
+            };
+            if debug=="points" {
                 let (_, scale, offset) = scale(target, ir.as_ref());
                 for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); }
                 return Ok(())
@@ -51,7 +86,7 @@ fn main() {
                 [xy{x: min.x, y: min.y}, xy{x: max.x, y: min.y}, xy{x: max.x, y: max.y}, xy{x: min.x, y: max.y}]
                 // TODO: rotate back
             }).into_iter().min_by(|&a,&b| f32::total_cmp(&area(a), &area(b))).unwrap();           
-            if self.debug_which=="ir" && self.debug=="quads" {
+            if debug=="quads" {
                 let (_, scale, offset) = scale(target, ir.as_ref());
                 for a in P_ir { cross(target, scale, offset, a, 0xFF00FF); }
                 return Ok(())
@@ -72,44 +107,18 @@ fn main() {
             Ok(())
         }
         fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {
-            use ui::Event::Key;
-            match event {
-                Key('a') =>{ self.debug = ""; return Ok(true); }
-                Key('b') =>{ self.debug = "binary"; return Ok(true); }
-                Key('c') if self.debug_which=="nir" =>{ self.debug = "contour"; return Ok(true); }
-                Key('c') if self.debug_which=="ir" =>{ self.debug = "cross"; return Ok(true); }
-                Key('d') =>{ self.debug = "distance"; return Ok(true); }
-                Key('e') =>{ self.debug = "erode"; return Ok(true); }
-                Key('f') =>{ self.debug = "filtered"; return Ok(true); }
-                Key('h') =>{ self.debug = "high"; return Ok(true); }
-                Key('i') =>{ self.debug_which = "ir"; return Ok(true); }
-                Key('l') =>{ self.debug = "low"; return Ok(true); }
-                Key('m') =>{ self.debug = "max"; return Ok(true); }
-                Key('n') =>{ self.debug_which = "nir"; return Ok(true); }
-                Key('o') =>{ self.debug = "original"; return Ok(true); }
-                Key(' ') =>{ self.debug = "checkerboard"; return Ok(true); }
-                Key('\n') => { self.debug_which=""; return Ok(true); }
-                //Key('p') =>{ self.debug = "peaks"; return Ok(true); }
-                Key('p') =>{ self.debug = "points"; return Ok(true); }
-                Key('q') =>{ self.debug = "quads"; return Ok(true); }
-                //Key('s') =>{ self.debug = "selection"; return Ok(true); }
-                Key('s') =>{ self.debug = "source"; return Ok(true); }
-                Key('⎙')|Key('\u{F70C}')/*|Key(' ')*/ => {
+            if let &ui::Event::Key(key) = event {
+                if ['⎙','\u{F70C}'].contains(&key) {
                     println!("⎙");
-                    if self.last_frame.iter_mut().zip(["hololens","nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| std::fs::write(name, &bytemuck::cast_slice(image)).unwrap()).count() == 0 {
-                        self.ir = Some(IR::new());
-                    }
-                    /*#[cfg(feature="png")] {
-                        let mut target = Image::uninitialized(xy{x: 2592, y:1944});
-                        let size = target.size;
-                        self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap();
-                        png::save_buffer("checkerboard.png", bytemuck::cast_slice(&target.data), target.size.x, target.size.y, png::ColorType::Rgba8).unwrap();
-                    }*/
-                },
-                _ => {},
-            }
-            Ok(/*self.nir.is_some()||self.ir.is_some()*/true)
+                    if self.last_frame.iter_mut().zip(["hololens","nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| write_raw(name, image.as_ref())).count() == 0 { self.ir = Some(IR::new()); }
+                    write("checkerboard.png", {let mut target = Image::uninitialized(xy{x: 2592, y:1944}); let size = target.size; self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap(); target}.as_ref());
+                }
+                else if let Some(word) = ["hololens","nir","ir"].iter().find(|word| key==word.chars().next().unwrap()) { self.debug_which = word }
+                else if let Some(word) = ["binary","contour","response","erode","high","low","max","original","checkerboard","points","quads","source"].iter().find(|word| key==word.chars().next().unwrap()) { self.debug = word; }
+                else { self.debug=""; self.debug_which=""; }
+                Ok(true)
+            } else { Ok(self.hololens.is_some() || self.nir.is_some()||self.ir.is_some()) }
         }
     }
-    ui::run("Checkerboard", &mut View{hololens, nir, ir, last_frame: [None, None], debug:"original", debug_which: "hololens"}).unwrap();
+    ui::run("Checkerboard", &mut View{hololens, nir, ir, last_frame: [None, None, None], debug_which: "hololens", debug:"points"}).unwrap();
 }

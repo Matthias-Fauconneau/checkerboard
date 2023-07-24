@@ -41,7 +41,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "ir",
+            "name": "hololens",
             "cargo": {
                 "args": [
                     "build",
@@ -54,7 +54,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["ir"],
+            "args": ["hololens"],
             "cwd": "${workspaceFolder}"
         },
     ]

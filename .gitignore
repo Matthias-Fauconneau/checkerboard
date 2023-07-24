@@ -1,7 +1,2 @@
-/target
-*.orig
 Cargo.lock
-*.png
-*.zip
-ir
-nir
+*.*x*

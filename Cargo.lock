@@ -776,7 +776,6 @@ dependencies = [
 [[package]]
 name = "image"
 version = "0.0.0"
-source = "git+https://github.com/Matthias-Fauconneau/image#f060d90e5542b8f7a109fca3115aa3c44ff5dcab"
 dependencies = [
  "bytemuck",
  "num 0.0.0",

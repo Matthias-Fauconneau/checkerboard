@@ -1,7 +1,7 @@
 use image::{Image, xy};
 pub struct Hololens {stream: ffmpeg::format::context::Input, video_stream_index: usize, decoder: ffmpeg::codec::decoder::Video}
-impl Hololens {
-    pub fn new() -> Self {
+impl super::Camera for Hololens {
+    fn new() -> Self {
         use ffmpeg::{format, media::Type, codec::context::Context as CodecContext};
         ffmpeg::init().unwrap();
         let hololens = std::fs::read_to_string("../../../.hololens").unwrap();
@@ -13,7 +13,7 @@ impl Hololens {
         let decoder = codec.decoder().video().unwrap();
         Self{stream, video_stream_index, decoder}
     }
-    pub fn next(&mut self) -> Image<Box<[u16]>> {
+    fn next(&mut self) -> Image<Box<[u16]>> {
         let mut frame = ffmpeg::util::frame::video::Video::empty();
         while self.decoder.receive_frame(&mut frame).is_err() {
             let (_, packet) = self.stream.packets().find(|(stream,_)| stream.index() == self.video_stream_index).unwrap();

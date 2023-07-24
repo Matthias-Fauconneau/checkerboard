@@ -33,9 +33,9 @@ pub fn transpose_low_pass_1D(source: Image<&[u16]>, R: u32) -> Image<Box<[u16]>>
     transpose
 }
 
-fn low_pass(image: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> { transpose_low_pass_1D(transpose_low_pass_1D(image, R).as_ref(), R) }
+pub fn low_pass(image: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> { transpose_low_pass_1D(transpose_low_pass_1D(image, R).as_ref(), R) }
 
-fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
+pub fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
     let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
     if !(min < max) { return None; }
     let mut low_then_high = low_pass(image.as_ref(), R);
@@ -74,41 +74,35 @@ fn otsu(image: Image<&[u16]>) -> u16 {
     threshold
 }
 
-fn binary(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u16]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
+fn binary16(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u16]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
     false => if p>threshold { 0xFFFF } else { 0 },
     true => if p<threshold { 0xFFFF } else { 0 }
 }))}
-fn binary8(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u8]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
+fn binary(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u8]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
     false => if p>threshold { 0xFF } else { 0 },
     true => if p<threshold { 0xFF } else { 0 }
 }))}
 
-pub fn checkerboard_quad(source: Image<&[u16]>, black: bool, debug: &'static str) -> Result<[vec2; 4],Image<Box<[u16]>>> {
-    let low = low_pass(source.as_ref(), 12);
-    if debug=="low" { return Err(low); }
-    let Some(high) = self::high_pass(low.as_ref(), 127, 0x1000) else { return Err(low); };
-    let threshold = otsu(high.as_ref());    
-    if debug=="binary" { return Err(binary(high.as_ref(), threshold, false)); }
-
-    let mut binary8 = self::binary8(high.as_ref(), threshold, false);
-    let mut erode = Image::zero(binary8.size);
-    for i in 0..9 {
+fn erode(high: Image<&[u16]>, erode_steps: usize, threshold: u16) -> Image<Box<[u8]>> {
+    let mut binary = self::binary(high.as_ref(), threshold, false);
+    let mut erode = Image::zero(binary.size);
+    for i in 0..erode_steps {
         for y in 1..erode.size.y-1 {
             for x in 1..erode.size.x-1 {
-                let p = |dx, dy| binary8[xy{x:(x as i32+dx) as u32,y: (y as i32+dy) as u32}];
+                let p = |dx, dy| binary[xy{x:(x as i32+dx) as u32,y: (y as i32+dy) as u32}];
                 erode[xy{x,y}] = 
                     if i%2 == 0 {[p(0,-1),p(-1,0),p(0,0),p(1,0),p(0,1)].into_iter().max()}
                     else {[p(-1,-1),p(0,-1),p(1,-1),p(-1,0),p(0,0),p(1,0),p(-1,1),p(0,1),p(1,1)].into_iter().max()}.unwrap();
             }
         }
-        std::mem::swap(&mut binary8, &mut erode);
+        std::mem::swap(&mut binary, &mut erode);
     }
-    if debug=="erode" { return Err(Image::from_iter(binary8.size, binary8.iter().map(|&p| (p as u16)<<8))); }
+    binary
+}
 
-    let binary8 = png::GrayImage::from_vec(binary8.size.x, binary8.size.y, binary8.data.into_vec()).unwrap();
-    let contours = imageproc::contours::find_contours::<u16>(&binary8);
+fn quads(contours: &[imageproc::contours::Contour<u16>], min_area: f32) -> Box<[[vec2; 4]]> {
     let mut quads = Vec::new();
-    for (_i, contour) in contours.iter().enumerate() {
+    for contour in contours {
         let contour = contour.points.iter().map(|p| vec2::from(xy{x: p.x, y: p.y})).collect::<Box<_>>();
         if contour.len() < 4 {continue;}
         let quad = |Q:&[vec2]| -> Option<[vec2; 4]> {
@@ -124,24 +118,20 @@ pub fn checkerboard_quad(source: Image<&[u16]>, black: bool, debug: &'static str
         };
         let Some([a,b,c,d]) = quad(&contour) else {continue;};
         let area = {let abc = cross2(b-a,c-a); if abc<0. {continue;} let cda = cross2(d-c,a-c); if cda<0. {continue;} (abc+cda)/2.};
-        if area < 64.*64. { continue; }
+        if area < min_area { continue; }
         if [a,b,c,d,a].array_windows().any(|&[a,b]| vector::sq(b-a)>256.*256.) {continue;}
         quads.push([a,b,c,d]);
     }
-    
-    let all_quads = quads.clone();
-    quads.retain(|a| all_quads.iter().any(|b| b!=a && a.iter().any(|p| b.iter().any(|q| vector::sq(q-p) < if black {256.*256.} else {32.*32.}))));
-    
-    if debug=="quads" { 
-        let mut quad_contour_image = Image::zero(source.size);
-        for q in quads { for &[a,b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() { for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; } } }
-        return Err(quad_contour_image); 
-    }
-    
-    let points : Vec<_> = quads.into_iter().map(|q| q.into_iter()).flatten().collect();
+    quads.into_boxed_slice()
+}
 
-    if points.len() < 4 { return Err(binary(high.as_ref(), threshold, false)); }
-    assert!(points.len() >= 4);
+/*fn remove_isolated(quads: &[[vec2; 4]], max_distance: f64) -> Box<[[vec2; 4]]> { //32-256
+    let all_quads = quads.clone();
+    quads.retain(|a| all_quads.iter().any(|b| b!=a && a.iter().any(|p| b.iter().any(|q| vector::sq(q-p) < sq(max_distance)))));
+    quads.into_boxed_slice()
+}*/
+
+pub fn convex_hull(points: &[vec2]) -> Vec<vec2> {
     let mut p0 = *points.iter().min_by(|a,b| a.x.total_cmp(&b.x)).unwrap();
     let mut Q = vec![];
     loop {
@@ -153,24 +143,40 @@ pub fn checkerboard_quad(source: Image<&[u16]>, black: bool, debug: &'static str
         if next == Q[0] { break; }
         p0 = next;
     }
-    if Q.len() < 4  { return Err(binary(high.as_ref(), threshold, false)); }
-    assert!(Q.len() >= 4);
+    Q
+}
 
-     // Simplifies polygon to 4 corners
-    while Q.len() > 4 {
-        Q.remove(((0..Q.len()).map(|i| {
-            let [p0, p1, p2]  = std::array::from_fn(|j| Q[(i+j)%Q.len()]);
+pub fn simplify(mut P: Vec<vec2>) -> Vec<vec2> {
+    // Simplifies polygon to 4 corners
+    while P.len() > 4 {
+        P.remove(((0..P.len()).map(|i| {
+            let [p0, p1, p2]  = std::array::from_fn(|j| P[(i+j)%P.len()]);
             (cross2(p2-p0, p1-p0), i)
-        }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%Q.len());
+        }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%P.len());
     }
+    P
+}
 
-    let i0 = Q.iter().enumerate().min_by(|(_,a),(_,b)| (a.x+a.y).total_cmp(&(b.x+b.y))).unwrap().0; // top left
-    let mut Q = [0,1,2,3].map(|i|Q[(i0+i)%4]);
+pub fn top_left_first(Q: [vec2; 4]) -> [vec2; 4] { let i0 = Q.iter().enumerate().min_by(|(_,a),(_,b)| (a.x+a.y).total_cmp(&(b.x+b.y))).unwrap().0; [0,1,2,3].map(|i|Q[(i0+i)%4]) }
+pub fn long_edge_first(mut Q: [vec2; 4]) -> [vec2; 4] { if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); } Q }
 
-    // First edge is long edge
-    if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); }
-
-    Ok(Q)
+pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, min_side: f32, debug: &'static str) -> Result<[vec2; 4],Image<Box<[u16]>>> {
+    let threshold = otsu(high.as_ref());    
+    if debug=="binary" { return Err(binary16(high.as_ref(), threshold, false)); }
+    let erode = erode(high.as_ref(), erode_steps, threshold);
+    if debug=="erode" { return Err(Image::from_iter(erode.size, erode.iter().map(|&p| (p as u16)<<8))); }
+    let ref contours = imageproc::contours::find_contours::<u16>(&png::GrayImage::from_vec(erode.size.x, erode.size.y, erode.data.into_vec()).unwrap());
+    if debug=="contour" { let mut target = Image::zero(erode.size); for contour in contours { for p in &contour.points { target[xy{x: p.x as u32, y: p.y as u32}] = 0xFFFF; }} return Err(target); }
+    let quads = quads(contours, sq(min_side));
+    if debug=="quads" { let mut target = Image::zero(erode.size);
+        for q in &*quads { for [&a,&b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() { for (p,_,_,_) in ui::line::generate_line(target.size, [a,b]) { target[p] = 0xFFFF; } } }
+        return Err(target); 
+    }
+    let points : Box<_> = quads.into_iter().map(|q| q.into_iter()).flatten().copied().collect();
+    if points.len() < 4 { return Err(binary16(high.as_ref(), threshold, false)); }
+    let Q = simplify(convex_hull(&*points));
+    let Ok(Q) = Q.try_into() else { return Err(binary16(high, threshold, false)) };
+    Ok(long_edge_first(top_left_first(Q)))
 }
 
 fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
@@ -189,10 +195,9 @@ fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
     low_pass(cross.as_ref(), 1)
 }
 
-pub fn checkerboard_direct_intersections(source: Image<&[u16]>, max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
-    let Some(high) = self::high_pass(source.as_ref(), 16, 0x2000) else { return Err(source.clone()); };
-    let cross = self::cross_response(high.as_ref());
-    if debug=="cross" { return Err(cross); }
+pub fn checkerboard_direct_intersections(high: Image<&[u16]>, max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
+    let cross = self::cross_response(high);
+    if debug=="response" { return Err(cross); }
     
     let threshold = otsu(cross.as_ref()); //foreground_mean
     if debug=="binary" { return Err(Image::from_iter(cross.size, cross.iter().map(|&p| if p>threshold { p } else { 0 }))); }
@@ -273,9 +278,9 @@ pub fn cross(target: &mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, col
     for dx in -64..64 { plot(dx, 0); }
 }
 
-pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, debug: &'static str, target: &mut Image<&mut [u32]>) -> Option<[vec2; 4]> { 
+pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usize, min_side: f32, debug: &'static str, target: &mut Image<&mut [u32]>) -> Option<[vec2; 4]> { 
     use super::image::scale;
-    match checkerboard_quad(nir.as_ref(), black, debug) {
+    match checkerboard_quad(nir.as_ref(), black, erode_steps, min_side, debug) {
         Err(image) => { scale(target, image.as_ref()); None }
         Ok(points) => {
             let points = match refine(nir.as_ref(), points, 0/*128*/, debug) {

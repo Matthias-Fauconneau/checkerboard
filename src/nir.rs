@@ -4,12 +4,12 @@
     payload_receiver: cameleon::payload::PayloadReceiver
 }
 use image::{Image, xy};
-#[cfg(not(feature="u3v"))] impl NIR {
-    pub fn new() -> Self { Self }
-    pub fn next(&mut self) -> Image<Box<[u16]>> { panic!("!u3v") }
+#[cfg(not(feature="u3v"))] impl super::Camera for NIR {
+    fn new() -> Self { Self }
+    fn next(&mut self) -> Image<Box<[u16]>> { panic!("!u3v") }
 }
-#[cfg(feature="u3v")] impl NIR {
-    pub fn new() -> Self {
+#[cfg(feature="u3v")] impl super::Camera for NIR {
+    fn new() -> Self {
         let mut cameras = cameleon::u3v::enumerate_cameras().unwrap();
         //for camera in &cameras { println!("{:?}", camera.info()); }
         let mut camera = cameras.remove(0); // find(|c| c.info().contains("U3-368xXLE-NIR")).unwrap()
@@ -23,7 +23,7 @@ use image::{Image, xy};
         exposure_time.set_value(&mut params_ctxt, 100.).unwrap(); // 15ms=66Hz
         Self{payload_receiver: camera.start_streaming(3).unwrap(), camera}
     }
-    pub fn next(&mut self) -> Image<Box<[u16]>> {
+    fn next(&mut self) -> Image<Box<[u16]>> {
         let payload = self.payload_receiver.recv_blocking().unwrap();
         let &cameleon::payload::ImageInfo{width, height, ..} = payload.image_info().unwrap();
         let image = Image::new(xy{x: width as u32, y: height as u32}, payload.image().unwrap());
