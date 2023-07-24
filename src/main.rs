@@ -33,9 +33,6 @@ fn refine(source: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static 
           (1..=6).map(|y|
                     (1..=8).map(move |x| {
                         let xy{x, y} = xy{x: x as f32/9., y: y as f32/7.};
-                /*(0..6).map(|y|
-                    (0..8).map(move |x| {
-                        let xy{x, y} = xy{x: x as f32/7., y: y as f32/5.};*/
                         let [A,B,C,D] = points.clone();
                         let p = y*(x*A+(1.-x)*B) + (1.-y)*(x*D+(1.-x)*C);
                         let p = xy{x: p.x.round() as u32, y: p.y.round() as u32,};
@@ -61,32 +58,37 @@ fn refine(source: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static 
 }
 
 fn main() {
-    struct Hololens {stream: ffmpeg::format::Input, decoder: ffmpeg::codec::decoder::Video}
+    struct Hololens {stream: ffmpeg::format::context::Input, video_stream_index: usize, decoder: ffmpeg::codec::decoder::Video}
     impl Hololens {
         fn new() -> Self {
             use ffmpeg::{format, media::Type, codec::context::Context as CodecContext, util::frame::video::Video};
             ffmpeg::init().unwrap();
-            //let mut stream = format::input(&"../live_high.mp4").unwrap();
-            let mut stream = format::input(&"https://192.168.0.101/api/holographic/stream/live_high.mp4?holo=false&pv=true&mic=false&loopback=false&RenderFromCamera=false").unwrap();
+            let stream = format::input(&"../../../live_high.mp4").unwrap();
+            //let stream = format::input(&"https://192.168.0.102/api/holographic/stream/live_high.mp4?holo=false&pv=true&mic=false&loopback=false&RenderFromCamera=false").unwrap();
             let video = stream.streams().best(Type::Video).unwrap();
             let video_stream_index = video.index();
-            let codec = CodecContext::from_parameters(video.parameters())?;
-            let mut decoder = codec.decoder().video()?;
-            Self{stream, decoder}
+            let codec = CodecContext::from_parameters(video.parameters()).unwrap();
+            let decoder = codec.decoder().video().unwrap();
+            Self{stream, video_stream_index, decoder}
         }
         fn next(&mut self) -> Image<Box<[u16]>> {
             let mut frame = ffmpeg::util::frame::video::Video::empty();
-            for (stream, packet) in self.stream.packets() {
-                if stream.index() == video_stream_index {
-                    self.decoder.send_packet(&packet)?;
-                    while self.decoder.receive_frame(&mut frame).is_ok() {}
-                }
+            while self.decoder.receive_frame(&mut frame).is_err() {
+                let (_, packet) = self.stream.packets().find(|(stream,_)| stream.index() == self.video_stream_index).unwrap();
+                self.decoder.send_packet(&packet).unwrap();
+                /*for (stream, packet) in self.stream.packets() {
+                    //println!("{} {} packet", stream.index(), self.video_stream_index);
+                    if stream.index() == self.video_stream_index {
+                        self.decoder.send_packet(&packet).unwrap();
+                        break;
+                    }
+                }*/
             }
             /*let mut image = vec![0u16; (width*height) as usize];
             for y in 0..height { for x in 0..width {
                 image[(y*width+x) as usize] = (frame.data(0)[(y*frame.height()/height*frame.width()+x*frame.width()/width) as usize] as u16) << 8; 
             }}*/
-            Image::from_iter(frame.width(), frame.height(), frame.data(0).iter().map(|u8| u8 as u16))
+            Image::from_iter(xy{x: frame.width(), y: frame.height()}, frame.data(0).iter().map(|&u8| u8 as u16))
         }
     }
     let hololens = /*std::env::args().any(|a| a=="hololens").*/true.then(Hololens::new);
@@ -124,7 +126,7 @@ fn main() {
             image
         }
     }
-    let nir = /*std::env::args().any(|a| a=="nir").*/true.then(NIR::new);
+    let nir = std::env::args().any(|a| a=="nir").then(NIR::new);
 
     #[cfg(not(feature="uvc"))] struct IR;
     #[cfg(feature="uvc")] struct IR(*mut uvc::uvc_stream_handle_t);
@@ -171,9 +173,10 @@ fn main() {
             Image::new(xy{x: width as u32, y: height as u32}, Box::from(unsafe{std::slice::from_raw_parts(data as *const u16, (data_bytes/2) as usize)}))
         }
     }
-    let ir = /*std::env::args().any(|a| a=="ir")*/true.then(IR::new);
+    let ir = std::env::args().any(|a| a=="ir").then(IR::new);
 
     struct View {
+        hololens: Option<Hololens>,
         nir: Option<NIR>,
         ir: Option<IR>,
         last_frame: [Option<Image<Box<[u16]>>>; 2],
@@ -183,6 +186,15 @@ fn main() {
     impl ui::Widget for View {
         fn size(&mut self, _: size) -> size { xy{x: 2592, y: 1944} }
         fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
+            let hololens = self.hololens.as_mut().map(|hololens| {
+                let hololens = hololens.next();
+                //self.last_frame[0] = Some(nir.clone());
+                hololens
+            });
+            let hololens = hololens.unwrap();
+
+            if self.debug_which=="hololens" && ["original","source"].contains(&self.debug) { scale(target, hololens.as_ref()); return Ok(()); }
+            
             let nir = self.nir.as_mut().map(|nir| {
                 let nir = nir.next();
                 self.last_frame[0] = Some(nir.clone());
@@ -638,5 +650,5 @@ fn main() {
             Ok(/*self.nir.is_some()||self.ir.is_some()*/true)
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"", debug_which: ""}).unwrap();
+    ui::run("Checkerboard", &mut View{hololens, nir, ir, last_frame: [None, None], debug:"original", debug_which: "hololens"}).unwrap();
 }

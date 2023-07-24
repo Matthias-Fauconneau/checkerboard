@@ -11,8 +11,8 @@ vector={git='https://github.com/Matthias-Fauconneau/vector',features=['unstable'
 nalgebra={version='*', optional=true, default-features=false, features=['std']}
 image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit']}
 cameleon={version='*', features=['libusb'], optional=true}
-uvc={package='uvc-sys', version='*', optional=true}
-#uvc={package='uvc-sys', git='https://github.com/l1npengtul/libuvc-rs', optional=true}
+#uvc={package='uvc-sys', version='*', optional=true} '"uvc_format_desc_union_(anonymous_at_/usr/include/libuvc/libuvc_h_177_3)" is not a valid Ident', /home//.cargo/registry/src/index.crates.io-6f17d22bba15001f/proc-macro2-1.0.66
+uvc={package='uvc-sys', git='https://github.com/l1npengtul/libuvc-rs', optional=true}
 ui={git='https://github.com/Matthias-Fauconneau/ui',default-features=false,features=['softbuffer','generators']}
 png={package='image',version='*',default-features=false,features=['png'],optional=true}
 imageproc='*'
