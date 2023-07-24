@@ -1,6 +1,7 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image};
 
-pub fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
+// FIXME: minmax once, rescale once
+pub fn transpose_low_pass_1D(source: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> {
     let mut transpose = Image::uninitialized(source.size.yx());
     // /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
     let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
@@ -32,46 +33,23 @@ pub fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[
     transpose
 }
 
-pub enum Result {
-    Checkerboard([vec2; 4]),
-    Image(Image<Box<[u16]>>),
-    //Points(Vec<vec2>),
-    //Points([Vec<vec2>; 2], Image<Box<[u16]>>),
-    Points([Vec<(vec2, [Option<vec2>; 4])>; 2], Image<Box<[u16]>>),
-}
-pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> Result {
-    let mut high_pass = None;
-    const METHOD1: bool = false;
-    let image = if /* !black || METHOD1*/true { // only for IR with method 2
-        // Low pass
-        let low_pass = (image.size.y > 192).then(|| transpose_low_pass_1D::</*32*/12>(transpose_low_pass_1D::</*32*/12>(image.as_ref()).as_ref()));
-        let image = low_pass.as_ref().map(|image| image.as_ref()).unwrap_or(image);
-        
-        // High pass
-        let source = image;
-        let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
-        let mut low_then_high = if source.size.y <= 192 {
-            transpose_low_pass_1D::<16/*32*/>(transpose_low_pass_1D::<16/*32*/>(source.as_ref()).as_ref())
-        } else {
-            transpose_low_pass_1D::<127>(transpose_low_pass_1D::<127>(source.as_ref()).as_ref())
-        };
-        if !(min < max) { return Result::Image(low_then_high); }
-        if debug=="low" { return Result::Image(low_then_high); }
-        //low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
-        low_then_high.as_mut().zip_map(&source, |&low, &p| {
-            //let sub = (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16;
-            let high = (p-min) as u32*0xFFFF/(max-min) as u32;
-            assert!(high <= 0xFFFF);
-            let low = low.max(0x1000);
-            let div = ((high*0xFFFF/low as u32)>>4) as u16;
-            //((sub as u32+div as u32)/2) as u16
-            div
-        });
-        if debug=="high" { return Result::Image(low_then_high); }
-        high_pass = Some(low_then_high);
-        high_pass.as_ref().unwrap().as_ref()
-    } else { image };
+fn low_pass(image: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> { transpose_low_pass_1D(transpose_low_pass_1D(image, R).as_ref(), R) }
 
+fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
+    let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
+    if !(min < max) { return None; }
+    let mut low_then_high = low_pass(image.as_ref(), R);
+    low_then_high.as_mut().zip_map(&image, |&low, &p| {
+        let high = (p-min) as u32*0xFFFF/(max-min) as u32;
+        assert!(high <= 0xFFFF);
+        let low = low.max(threshold);
+        let div = ((high*0xFFFF/low as u32)>>3) as u16;
+        div
+    });
+    Some(low_then_high)
+}
+
+fn otsu(image: Image<&[u16]>) -> u16 {
     assert!(image.len() < 1<<24);
     let mut histogram : [u32; 65536] = [0; 65536];
     for &pixel in image.iter() { histogram[pixel as usize] += 1; }
@@ -93,311 +71,76 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
                             / (foreground_count as u48*background_count as u48) as u128;
         if variance >= maximum_variance { (threshold, maximum_variance) = (i as u16, variance); }
     }
-    //#[allow(unused_variables)] let binary = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFFFF } else { 0 }));
-    #[allow(unused_variables)] let binary = Image::from_iter(image.size, image.iter().map(|&p| match black {
-        true => if p>threshold { 0xFFFF } else { 0 },
-        false => if p<threshold { 0xFFFF } else { 0 }
-    }));
-    if debug=="binary" { return Result::Image(binary); }
+    threshold
+}
 
-    let points : Vec<_> = if METHOD1==false {
-        //let binary8 = Image::from_iter(image.size, image.iter().map(|&p| if p>threshold { 0xFF } else { 0 }));
-        let mut binary8 = Image::from_iter(image.size, image.iter().map(|&p| match black {
-            true => if p>threshold { 0xFF } else { 0 },
-            false => if p<threshold { 0xFF } else { 0 }
-        }));
-        let mut erode = Image::zero(binary8.size);
-        for i in 0..if black {/*6*/9} else {/*2*/4} {
-            for y in 1..erode.size.y-1 {
-                for x in 1..erode.size.x-1 {
-                    let p = |dx, dy| binary8[xy{x:(x as i32+dx) as u32,y: (y as i32+dy) as u32}];
-                    //erode[xy{x,y}] = [/*p(-1,-1),*/p(0,-1),/*p(1,-1),*/p(-1,0),p(0,0),p(1,0),/*p(-1,1),*/p(0,1)/*,p(1,1)*/].into_iter().max().unwrap();
-                    erode[xy{x,y}] = 
-                        if i%2 == 0 {[p(0,-1),p(-1,0),p(0,0),p(1,0),p(0,1)].into_iter().max()}
-                        else {[p(-1,-1),p(0,-1),p(1,-1),p(-1,0),p(0,0),p(1,0),p(-1,1),p(0,1),p(1,1)].into_iter().max()}.unwrap();
-                }
-            }
-            std::mem::swap(&mut binary8, &mut erode);
-        }
-        if debug=="erode" { return Result::Image(Image::from_iter(binary8.size, binary8.iter().map(|&p| (p as u16)<<8))); }
+fn binary(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u16]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
+    false => if p>threshold { 0xFFFF } else { 0 },
+    true => if p<threshold { 0xFFFF } else { 0 }
+}))}
+fn binary8(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u8]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
+    false => if p>threshold { 0xFF } else { 0 },
+    true => if p<threshold { 0xFF } else { 0 }
+}))}
 
-        let binary8 = png::GrayImage::from_vec(binary8.size.x, binary8.size.y, binary8.data.into_vec()).unwrap();
-        let contours = imageproc::contours::find_contours::<u16>(&binary8);
-        let mut contour_image = Image::zero(image.size);
-        let mut quads = Vec::new();
-        for (_i, contour) in contours.iter().enumerate() {
-            //if contour.border_type != imageproc::contours::BorderType::Hole { continue; }
-            let contour = contour.points.iter().map(|p| vec2::from(xy{x: p.x, y: p.y})).collect::<Box<_>>();
-            if contour.len() < 4 {continue;}
-            if debug=="contour" { for p in &*contour { contour_image[xy{x: p.x as u32, y: p.y as u32}] = 0xFFFF/*[0xFF,0xFF00,0xFF0000][i%3]*/; }}
-            let quad = /*|contour:&[vec2]| -> Option<[vec2; 4]> {
-                use itertools::Itertools;
-                let key = |((_,&a),(_,&b))| vector::sq(a-b);
-                let Some(((a,_),(c,_))) = contour.iter().enumerate().tuple_combinations().max_by(|&a,&b| f32::total_cmp(&key(a), &key(b))) else {return None;};
-                assert!(a<c);
-                let key = |(_,b)| vector::cross2(b-contour[a], contour[c]-contour[a]).abs();
-                let b = a+contour[a..c].iter().enumerate().max_by(|&a,&b| f32::total_cmp(&key(a), &key(b))).unwrap().0;
-                let d = std::cmp::max_by(
-                    if let Some(a) = contour[..a].iter().enumerate().max_by(|&a,&b| f32::total_cmp(&key(a), &key(b))) {a} else {return None;},
-                    {let (i, d) = contour[c..].iter().enumerate().max_by(|&a,&b| f32::total_cmp(&key(a), &key(b))).unwrap(); (c+i, d)},
-                    |&a,&b| f32::total_cmp(&key(a), &key(b))
-                ).0;
-                Some([a,b,c,d].map(|i| contour[i]))*/
-            |Q:&[vec2]| -> Option<[vec2; 4]> {
-                assert!(Q.len() >= 4);
-                let mut Q:Vec<_> = Q.iter().copied().collect();
-                while Q.len() > 4 {
-                    Q.remove(((0..Q.len()).map(|i| {
-                        let [p0, p1, p2]  = std::array::from_fn(|j| Q[(i+j)%Q.len()]);
-                        (cross2(p1-p0, p2-p0), i)
-                    }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%Q.len());
-                }
-                Some(Q.try_into().unwrap())
-            };
-            let Some([a,b,c,d]) = quad(&contour) else {continue;};
-            let area = {let abc = cross2(b-a,c-a); if abc<0. {continue;} let cda = cross2(d-c,a-c); if cda<0. {continue;} (abc+cda)/2.};
-            if black {
-                //let area = {let abc = cross2(b-a,c-a); assert!(abc>=0., "abc {abc}"); let cda = cross2(c-b,d-b); assert!(cda>=0., "cda {cda}"); (abc+cda)/2.};
-                if area < 64.*64./*128.*128.*/ { continue; } // only for NIR
-                //if area > 256.*256. { continue; } // only for NIR
-                if [a,b,c,d,a].array_windows().any(|&[a,b]| vector::sq(b-a)>256.*256.) {continue;}
-            } else { // IR
-                if area < /*2.*2.*/4.*4./*8.*8.*/ { continue; }
-                if [a,b,c,d,a].array_windows().any(|&[a,b]| vector::sq(b-a)>16.*16.) {continue;}
-            }
-            //println!("{}", sqrt(area));
-            /*if debug=="quads" { for &[a,b] in [a,b,c,d,a].array_windows() {
-                for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; }
-            }}*/
-            quads.push([a,b,c,d]);
-        }
-        if debug=="contour" { return Result::Image(contour_image); }
-        //if debug=="quads" { /*assert!(!points.is_empty());*/ return Result::Points(points); }
-        //return Result::Image(contour_image);
+pub fn checkerboard_quad(source: Image<&[u16]>, black: bool, debug: &'static str) -> Result<[vec2; 4],Image<Box<[u16]>>> {
+    let low = low_pass(source.as_ref(), 12);
+    if debug=="low" { return Err(low); }
+    let Some(high) = self::high_pass(low.as_ref(), 127, 0x1000) else { return Err(low); };
+    let threshold = otsu(high.as_ref());    
+    if debug=="binary" { return Err(binary(high.as_ref(), threshold, false)); }
 
-        let all_quads = quads.clone();
-        quads.retain(|a| all_quads.iter().any(|b| b!=a && a.iter().any(|p| b.iter().any(|q| vector::sq(q-p) < if black {256.*256.} else {32.*32.}))));
-        /*if debug=="quads" { for &[a,b] in [a,b,c,d,a].array_windows() {
-                for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; }
-            }}*/
-
-        if debug=="quads" { 
-            let mut quad_contour_image = Image::zero(image.size);
-            for q in quads {
-                for &[a,b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() {
-                    for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; }
-                }
-            }
-            return Result::Image(quad_contour_image); 
-        }
-        
-        /*/*let quads = */quads.iter().map(|a| {
-            let e = {let [a,b,c,d] = &a; [a,b,c,d,a]}.array_windows().map(|&[a,b]| vector::sq(b-a)).min_by(f32::total_cmp).unwrap();
-            a.map(|p| (p, quads.iter().map(|b| b.iter().map(|q| vector::sq(q-p))).flatten().min_by(f32::total_cmp).unwrap() < e))
-        })//.collect();
-        .filter(|a| a.iter().any(|&(_,e)| e))
-        /*quads.into_iter()*/.map(|q| q.into_iter().map(|(p,_)| p)).flatten().collect()*/
-
-        /*let quads : Vec<_> = quads.iter().enumerate().map(|(i,a)| {
-            a.map(|p| (p, quads.iter().enumerate().filter(|&(j,_)| j!=i).map(|(j,b)| b.iter().enumerate().map(move |(qi,q)| (j, qi, vector::sq(q-p)))).flatten().min_by(|(_,_,a),(_,_,b)| f32::total_cmp(a,b)).unwrap()))
-        }).collect();
-        for q in &quads {
-            for &(a, (q, p, _e)) in q {
-                let b = quads[q][p].0;
-                for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; }
+    let mut binary8 = self::binary8(high.as_ref(), threshold, false);
+    let mut erode = Image::zero(binary8.size);
+    for i in 0..9 {
+        for y in 1..erode.size.y-1 {
+            for x in 1..erode.size.x-1 {
+                let p = |dx, dy| binary8[xy{x:(x as i32+dx) as u32,y: (y as i32+dy) as u32}];
+                erode[xy{x,y}] = 
+                    if i%2 == 0 {[p(0,-1),p(-1,0),p(0,0),p(1,0),p(0,1)].into_iter().max()}
+                    else {[p(-1,-1),p(0,-1),p(1,-1),p(-1,0),p(0,0),p(1,0),p(-1,1),p(0,1),p(1,1)].into_iter().max()}.unwrap();
             }
         }
-        quads.into_iter().filter(|a| {
-            let E = {let [a,b,c,d] = &a; [a,b,c,d,a]}.array_windows().map(|&[a,b]| vector::sq(b.0-a.0)).min_by(f32::total_cmp).unwrap();
-            a.iter().any(|&(_,(_,_,e))| e<E)
-        })
-        .map(|q| q.into_iter().map(|(p,_)| p)).flatten().collect()*/
-        quads.into_iter().map(|q| q.into_iter()).flatten().collect()
-    } else {
-        fn distance<T: TryFrom<u32>>(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[T]>> where T::Error: std::fmt::Debug {
-            let size = image.size;
-            let mut G = Image::uninitialized(size);
-            for x in 0..size.x {
-                G[xy{x, y: 0}] = if (image[xy{x, y: 0}] > threshold) ^ inverse { 0 } else { size.x+size.y };
-                for y in 1..size.y {
-                    G[xy{x, y}] = if (image[xy{x, y}] > threshold) ^ inverse { 0 } else { 1+G[xy{x, y: y-1}] };
-                }
-                for y in (0..size.y-1).rev() {
-                    if G[xy{x, y: y+1}] < G[xy{x, y}] {
-                        G[xy{x, y}] = 1 + G[xy{x, y: y+1}];
-                    }
-                }
+        std::mem::swap(&mut binary8, &mut erode);
+    }
+    if debug=="erode" { return Err(Image::from_iter(binary8.size, binary8.iter().map(|&p| (p as u16)<<8))); }
+
+    let binary8 = png::GrayImage::from_vec(binary8.size.x, binary8.size.y, binary8.data.into_vec()).unwrap();
+    let contours = imageproc::contours::find_contours::<u16>(&binary8);
+    let mut quads = Vec::new();
+    for (_i, contour) in contours.iter().enumerate() {
+        let contour = contour.points.iter().map(|p| vec2::from(xy{x: p.x, y: p.y})).collect::<Box<_>>();
+        if contour.len() < 4 {continue;}
+        let quad = |Q:&[vec2]| -> Option<[vec2; 4]> {
+            assert!(Q.len() >= 4);
+            let mut Q:Vec<_> = Q.iter().copied().collect();
+            while Q.len() > 4 {
+                Q.remove(((0..Q.len()).map(|i| {
+                    let [p0, p1, p2]  = std::array::from_fn(|j| Q[(i+j)%Q.len()]);
+                    (cross2(p1-p0, p2-p0), i)
+                }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%Q.len());
             }
-            let mut S = unsafe{Box::new_uninit_slice(size.x as usize).assume_init()};
-            let mut T = unsafe{Box::new_uninit_slice(size.x as usize).assume_init()};
-            let mut distance = Image::uninitialized(size);
-            for y in 0..size.y {
-                let mut q = 0i16;
-                S[0] = 0;
-                T[0] = 0;
-                let g = |i| G[xy{x: i as u32, y}];
-                let f = |x,i| sq((x as i16 - i as i16) as i32) as u32 + sq(g(i) as u32);
-                for u in 1..size.x as u16 {
-                    while q >= 0 && f(T[q as usize], S[q as usize]) > f(T[q as usize], u) { q = q - 1; }
-                    if q < 0 { q = 0; S[0] = u; }
-                    else {
-                        let Sep = |i,u| (sq(u as u32) - sq(i as u32) + sq(g(u) as u32) - sq(g(i) as u32)) / (2*(u as i16 - i as i16) as u32);
-                        let w = 1 + Sep(S[q as usize], u);
-                        if w < size.x {
-                            q = q + 1;
-                            S[q as usize] = u;
-                            T[q as usize] = w as u16;
-                        }
-                    }
-                }
-                for u in (0..size.x as u16).rev() {
-                    let d = f(u, S[q as usize]);
-                    distance[xy{x: u as u32, y}] = d.try_into().unwrap(); //if d > 0x2000 { 0 } else { (d*0xFF/0x2000) as u8 }; // /~32
-                    if T[q as usize] == u { q = q - 1; }
-                }
-            }
-            distance
-        }
-
-        let points = match [false,true].try_map(|inverse| -> std::result::Result<_, Image<Box<[u32]>>> {
-            let distance = distance::<u32>(image.as_ref(), threshold, inverse);
-            if inverse!=black && debug=="distance" { return Err(distance) }
-
-            let max = {
-                const R : u32 = 2;
-                let mut target = Image::zero(distance.size);
-                for y in R..distance.size.y-R { for x in R..distance.size.x-R {
-                    let center = distance[xy{x, y}];
-                    if center < /*4*4*/if distance.size.y <= 192 { 4*4 } else { 64*64 } { continue; }
-                    let mut flat = 0;
-                    if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-                        if (dx,dy) == (0,0) { continue; }
-                        if distance[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] > center { return false; }
-                        if distance[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] == center { flat += 1; }
-                    }} true})() { /*if flat < 12*/ { target[xy{x,y}] = center; } }
-                }}
-                target
-            };
-            if inverse!=black && debug=="max" { return Err(max) }
-
-            let mut max = max;
-            let mut points = Vec::new();
-            let R : u32 = if max.size.y <= 192 { 8 } else { 192/*128*//*112*/ }; // Merges close peaks (top left first)
-            for y in R..max.size.y-R { for x in R..max.size.x-R {
-                let value = max[xy{x,y}];
-                if value == 0 { continue; }
-                let mut flat = 0;
-                let mut sum : uint2 = zero();
-                for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-                    let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
-                    if max[p] == 0 { continue; }
-                    flat += 1;
-                    sum += p;
-                }}
-                points.push( (vec2::from(int2::from(xy{x,y}+sum))/((1+flat) as f32), value) );
-                for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-                    let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
-                    max[p] = 0; // Merge small flat plateaus as single point
-                }}
-            }}
-            Ok(points)
-        }) {
-            Err(image) => return Result::Image({
-                let MinMax{min, max} = minmax(image.iter().copied()).unwrap();
-                if min<max { Image::from_iter(image.size, image.iter().map(|u| ((u-min) as u64*0xFFFF/(max-min) as u64) as u16)) }
-                else { binary }
-            }),
-            Ok(points) => points
+            Some(Q.try_into().unwrap())
         };
-        if debug=="peaks" { return Result::Points(points.map(|points| points.iter().map(|&(p, _)|(p, [None; 4])).collect()), high_pass.unwrap()); }
+        let Some([a,b,c,d]) = quad(&contour) else {continue;};
+        let area = {let abc = cross2(b-a,c-a); if abc<0. {continue;} let cda = cross2(d-c,a-c); if cda<0. {continue;} (abc+cda)/2.};
+        if area < 64.*64. { continue; }
+        if [a,b,c,d,a].array_windows().any(|&[a,b]| vector::sq(b-a)>256.*256.) {continue;}
+        quads.push([a,b,c,d]);
+    }
+    
+    let all_quads = quads.clone();
+    quads.retain(|a| all_quads.iter().any(|b| b!=a && a.iter().any(|p| b.iter().any(|q| vector::sq(q-p) < if black {256.*256.} else {32.*32.}))));
+    
+    if debug=="quads" { 
+        let mut quad_contour_image = Image::zero(source.size);
+        for q in quads { for &[a,b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() { for (p,_,_,_) in ui::line::generate_line(quad_contour_image.size, [a,b]) { quad_contour_image[p] = 0xFFFF; } } }
+        return Err(quad_contour_image); 
+    }
+    
+    let points : Vec<_> = quads.into_iter().map(|q| q.into_iter()).flatten().collect();
 
-        for points in &points { if points.is_empty() { return Result::Image(high_pass.unwrap()); } }
-        for points in &points { assert!(!points.is_empty()); }
-
-        //let black = if black { 0 } else { 1 };
-        //const N : usize = 4*5+3*4;
-        //let all_points = points.clone();
-        /*let remove_isolated = |points: &mut [Vec<(vec2, u32)>; 2]| {
-            loop {
-                let isolation = [0,1].map(|i| minmax(points[i%2].iter().map(|a| points[[1,0][i%2]].iter().map(|b| vector::sq(a.0-b.0)).min_by(f32::total_cmp).unwrap())).unwrap());
-                let (i, isolation) = isolation.into_iter().enumerate().max_by(|(_, a), (_, b)| a.max.total_cmp(&b.max)).unwrap();
-                if isolation.max < 5./4.*isolation.min { break; }
-                let before = points[i%2].len(); //points.each_ref().map(Vec::len);
-                points[i%2] = points[i%2].iter().filter(|a| points[[1,0][i%2]].iter().any(|b| vector::sq(a.0-b.0) < isolation.max/*6. * a.1 as f32*/)).copied().collect();
-                //assert_ne!(before, points.each_ref().map(Vec::len));
-                assert_ne!(before, points[i%2].len());
-                if i==black && points[black].len() == N { break; }
-                //if points[i%2].len() ==
-                //if points.each_ref().map(Vec::len) != before { assert!(points[i%2].len() == before[i%2]-1); continue; } else { break; }
-            }
-        };*/
-        //remove_isolated(&mut points);
-
-        /*return Result::Points([0,1].map(|i| {
-            points[i].iter().map(|&(p, _)|
-                (p, [None; 4])
-            ).collect()
-        }), high_pass);*/
-
-        //if points[black].len() < N { return Result::Points(points, high_pass); }
-        
-        let link = |a:&[(vec2,u32)],b:&[(vec2,u32)]| -> Vec<(vec2, [Option<vec2>; 4])> { a.iter().map(|(a,_)| {
-            let mut b = b.iter().copied().collect::<Box<_>>();
-            let (closest, _, _) = b.select_nth_unstable_by(4, |(b0,_),(b1,_)| f32::total_cmp(&vector::sq(b0-a),&vector::sq(b1-a)));
-            (*a, <[(vec2, u32); 4]>::try_from(closest).unwrap().map(|(p,_)| Some(p)))
-        }).collect()};
-
-        //if debug=="filtered" { return Result::Points(points.map(|points| points.iter().map(|&(p, _)|(p, [None; 4])).collect()), high_pass.unwrap()); }
-        if points[0].len() < 4 || points[1].len() < 4 { return Result::Points(points.map(|points| points.iter().map(|&(p, _)|(p, [None; 4])).collect()), high_pass.unwrap()); }
-        
-        let [mut a, mut b] = [link(&points[0], &points[1]), link(&points[1], &points[0])];
-        let retain_mutual_closest = |a:&mut Vec<(vec2, [Option<vec2>; 4])>, b: &mut Vec<(vec2, [Option<vec2>; 4])>| {
-            for a in a {
-                for n in &mut a.1 {
-                    if !b.iter().any(|b| b.0==n.unwrap() && b.1.iter().any(|b| b.is_some_and(|b| b==a.0))) { *n = None; }
-                }
-            }
-        };
-        retain_mutual_closest(&mut a, &mut b);
-        retain_mutual_closest(&mut b, &mut a);
-
-        let enforce_topology = |mut a: &mut Vec<(vec2, [Option<vec2>; 4])>, mut b: &mut Vec<(vec2, [Option<vec2>; 4])>| {
-            a.retain(|(_,n)| n.iter().filter(|n| n.is_some()).count() >= 2);
-            b.retain(|(_,n)| n.iter().filter(|n| n.is_some()).count() >= 3);
-
-            let retain_valid_edges = |a:&mut Vec<(vec2, [Option<vec2>; 4])>, b: &mut Vec<(vec2, [Option<vec2>; 4])>| {
-                for (_,a) in a { for n in a { *n=n.filter(|n| b.iter().any(|b| b.0==*n)) } }
-            };
-            retain_valid_edges(&mut a, &mut b);
-            retain_valid_edges(&mut b, &mut a);
-        };
-        for _ in 0..2 { enforce_topology(&mut a, &mut b); }
-
-        let (count, sum) = [&a, &b].iter().map(|set| set.iter().map(|p| p.1.iter().filter_map(|n| n.map(|n| vector::distance(p.0, n))))).flatten().flatten().fold((0,0.), |(count, sum), d| (count+1, sum+d));
-        let length = sum/count as f32;
-
-        for p in &mut a { for n in &mut p.1 { *n=n.filter(|n| vector::distance(p.0, *n)<length*2./1.) } }
-        for p in &mut b { for n in &mut p.1 { *n=n.filter(|n| vector::distance(p.0, *n)<length*2./1.) } }
-
-        enforce_topology(&mut a, &mut b);
-
-        let points = [a,b];
-        if debug=="filtered" { return Result::Points(points, high_pass.unwrap()); }
-        return Result::Points(points, high_pass.unwrap());
-
-        /*//let points = if points.len() > N { let (points, _, _) = points.select_nth_unstable_by(N, |(_,a), (_,b)| b.cmp(a)); points } else { points.as_mut_slice() };
-        while points[black].len() > N {
-            points[black].remove(points[black].iter().enumerate().min_by_key(|(_,(_,v))| v).unwrap().0);
-            remove_isolated(&mut points);
-        }
-        
-        let points = &mut points[black]; //  IR "white" = Visible black
-        
-        if debug=="selection" { let p = points.iter().map(|&(p, _)|(p, [None; 4])).collect(); return Result::Points(if black==1 {[Vec::new(), p]}else{[p,Vec::new()]}, high_pass.unwrap()); }
-        points.iter().map(|&(p, _)| p).collect()*/
-    };
-
-    if points.len() < 4  { return Result::Image(binary); }
+    if points.len() < 4 { return Err(binary(high.as_ref(), threshold, false)); }
     assert!(points.len() >= 4);
     let mut p0 = *points.iter().min_by(|a,b| a.x.total_cmp(&b.x)).unwrap();
     let mut Q = vec![];
@@ -410,7 +153,7 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
         if next == Q[0] { break; }
         p0 = next;
     }
-    if Q.len() < 4  { return Result::Image(binary); }
+    if Q.len() < 4  { return Err(binary(high.as_ref(), threshold, false)); }
     assert!(Q.len() >= 4);
 
      // Simplifies polygon to 4 corners
@@ -420,140 +163,54 @@ pub fn checkerboard(image: Image<&[u16]>, black: bool, debug: &'static str) -> R
             (cross2(p2-p0, p1-p0), i)
         }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%Q.len());
     }
-    //let Some(mut Q) = quad(&Q) else {return Result::Points(Q);};
-    
-    /*let [a,b,c,d]:[vec2;4] = Q.try_into().unwrap();
-    let area = {let abc = cross2(b-a,c-a); let cda = cross2(d-c,a-c); assert!((abc > 0. && cda > 0.) || (abc < 0. && cda < 0.), "{abc} {cda}"); (abc+cda)/2.};
-    let Q = if area > 0. {[a,b,c,d]} else {[a,d,c,b]};*/
+
     let i0 = Q.iter().enumerate().min_by(|(_,a),(_,b)| (a.x+a.y).total_cmp(&(b.x+b.y))).unwrap().0; // top left
     let mut Q = [0,1,2,3].map(|i|Q[(i0+i)%4]);
 
     // First edge is long edge
     if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); }
 
-    Result::Checkerboard(Q)
-    //if toggle && black==1 { return Result::Points(if black==1 {[Vec::new(), Q.iter().map(|&p| (p,0)).collect()]}else{[Q.iter().map(|&p| (p,0)).collect(), Vec::new()]}, high_pass); }
-    //Result::Checkerboard(Q.try_into().unwrap())
-    //Result::Checkerboard(Q)
+    Ok(Q)
 }
 
-/*pub enum Result {
-    Image(Image<Box<[u16]>>),
-    Points(Vec<uint2>),
-}*/
-
-pub fn checkerboard2(source: Image<&[u16]>, max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
-    // High pass
-    let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap();
-    let mut low_then_high = transpose_low_pass_1D::<16>(transpose_low_pass_1D::<16>(source.as_ref()).as_ref());
-    if debug=="low" { return Err(low_then_high); }
-    if !(min < max) { return Err(low_then_high); }
-    //low_then_high.as_mut().zip_map(&source, |&low, &p| (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16);
-    low_then_high.as_mut().zip_map(&source, |&low, &p| {
-        //let sub = (0x8000+(((p-min) as u32 *0xFFFF/(max-min) as u32) as i32-low as i32).clamp(-0x8000,0x7FFF)) as u16;
-        let high = (p-min) as u32*0xFFFF/(max-min) as u32;
-        assert!(high <= 0xFFFF);
-        let low = low.max(0x2000);
-        let div = ((high*0xFFFF/low as u32)>>3) as u16;
-        //((sub as u32+div as u32)/2) as u16
-        div
-    });
-    if debug=="high" { return Err(low_then_high); }
-    let source = low_then_high;
-
-    let source = {
-        let mut target = Image::zero(source.size);
-        {
-            const R : u32 = 3;
-            for y in R..source.size.y-R {
-                for x in R..source.size.x-R {
-                    let [p00,p10,p01,p11] = {let r=R as i32;[xy{x:-r,y:-r},xy{x:r,y:-r},xy{x:-r,y:r},xy{x:r,y:r}]}.map(|d|source[(xy{x,y}.signed()+d).unsigned()]);
-                    let threshold = ([p00,p10,p01,p11].into_iter().map(|u16| u16 as u32).sum::<u32>()/4) as u16;
-                    if p00<threshold && p11<threshold && p10>threshold && p01>threshold ||
-                        p00>threshold && p11>threshold && p10<threshold && p01<threshold {
-                        target[xy{x,y}] = (num::abs(p00 as i32 + p11 as i32 - (p10 as i32 + p01 as i32))/2) as u16;
-                    }
-                }
+fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
+    let mut cross = Image::zero(high.size);
+    const R : u32 = 3;
+    for y in R..high.size.y-R {
+        for x in R..high.size.x-R {
+            let [p00,p10,p01,p11] = {let r=R as i32;[xy{x:-r,y:-r},xy{x:r,y:-r},xy{x:-r,y:r},xy{x:r,y:r}]}.map(|d|high[(xy{x,y}.signed()+d).unsigned()]);
+            let threshold = ([p00,p10,p01,p11].into_iter().map(|u16| u16 as u32).sum::<u32>()/4) as u16;
+            if p00<threshold && p11<threshold && p10>threshold && p01>threshold ||
+                p00>threshold && p11>threshold && p10<threshold && p01<threshold {
+                cross[xy{x,y}] = (num::abs(p00 as i32 + p11 as i32 - (p10 as i32 + p01 as i32))/2) as u16;
             }
         }
-        target
-    };
-    if debug=="cross" { return Err(source); }
-
-    let source = transpose_low_pass_1D::<1>(transpose_low_pass_1D::<1>(source.as_ref()).as_ref());
-    if debug=="low" { return Err(source); }
-
-    assert!(source.len() < 1<<24);
-    let mut histogram : [u32; 65536] = [0; 65536];
-    for &pixel in source.iter() { histogram[pixel as usize] += 1; }
-    type u40 = u64;
-    let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
-    //let mut threshold : u16 = 0;
-    let mut maximum_variance = 0;
-    type u24 = u32;
-    let (mut background_count, mut background_sum) : (u24, u40)= (0, 0);
-    let mut foreground_mean : u16 = 0;
-    for (i, &count) in histogram.iter().enumerate() {
-        background_count += count;
-        if background_count == 0 { continue; }
-        if background_count as usize == source.len() { break; }
-        background_sum += i/*16*/ as u40 * count/*24*/ as u40;
-        let foreground_count : u24 = source.len() as u24 - background_count;
-        let foreground_sum : u40 = sum - background_sum;
-        type u48 = u64;
-        let variance = sq((foreground_sum as u64*background_count as u64 - background_sum as u64*foreground_count as u64) as u128)
-                            / (foreground_count as u48*background_count as u48) as u128;
-        if variance >= maximum_variance { (/*threshold,*/ maximum_variance, foreground_mean) = (/*i as u16,*/ variance, (foreground_sum/foreground_count as u40) as u16); }
     }
-    //let foreground_mode = threshold+histogram[threshold as usize..].iter().enumerate().max_by_key(|(_, &v)| v).unwrap().0 as u16;
-    //assert!(foreground_mode < foreground_mean);
-    let threshold = foreground_mean; //(threshold+foreground_mean)/2;
-    if debug=="binary" { return Err(Image::from_iter(source.size, source.iter().map(|&p| if p>threshold { p } else { 0 }))); }
+    low_pass(cross.as_ref(), 1)
+}
+
+pub fn checkerboard_direct_intersections(source: Image<&[u16]>, max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
+    let Some(high) = self::high_pass(source.as_ref(), 16, 0x2000) else { return Err(source.clone()); };
+    let cross = self::cross_response(high.as_ref());
+    if debug=="cross" { return Err(cross); }
+    
+    let threshold = otsu(cross.as_ref()); //foreground_mean
+    if debug=="binary" { return Err(Image::from_iter(cross.size, cross.iter().map(|&p| if p>threshold { p } else { 0 }))); }
 
     let mut points = Vec::new();
-    //let max = {
-        const R : u32 = 12;//128
-        //let mut target = Image::zero(source.size);
-        for y in R..source.size.y-R { for x in R..source.size.x-R {
-            let center = source[xy{x, y}];
-            if center < threshold { continue; }
-            let mut flat = 0;
-            if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-                if (dx,dy) == (0,0) { continue; }
-                if source[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] > center { return false; }
-                if source[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] == center { flat += 1; }
-            }} true})() { 
-                //target[xy{x,y}] = center; 
-                points.push(xy{x,y});
-            }
-        }}
-        //target
-    //};
-    /*let mut max = max;
-    let mut points = Vec::new();
-    let R : u32 = 12; // Merges close peaks (top left first)
-    for y in R..max.size.y-R { for x in R..max.size.x-R {
-        let value = max[xy{x,y}];
-        if value == 0 { continue; }
+    const R : u32 = 12;
+    for y in R..cross.size.y-R { for x in R..cross.size.x-R {
+        let center = cross[xy{x, y}];
+        if center < threshold { continue; }
         let mut flat = 0;
-        let mut sum : uint2 = num::zero();
-        for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-            let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
-            if max[p] == 0 { continue; }
-            flat += 1;
-            sum += p;
-        }}
-        points.push( (vec2::from(int2::from(xy{x,y}+sum))/((1+flat) as f32), value) );
-        for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
-            let p = xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32};
-            max[p] = 0; // Merge small flat plateaus as single point
-        }}
-    }}*/
-
-    //let points = points.iter().map(|(a,_)| (*a, points.iter().filter(|(b,_)| a!=b).map(|&(b,_)| (b, vector::sq(b-a))).min_by(|(_,a),(_,b)| f32::total_cmp(a, b)).unwrap().0));
-    if points.len() < 4 { return Err(source); }
+        if (||{ for dy in -(R as i32)..=R as i32 { for dx in -(R as i32)..=R as i32 {
+            if (dx,dy) == (0,0) { continue; }
+            if cross[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] > center { return false; }
+            if cross[xy{x: (x as i32+dx) as u32, y: (y as i32+dy) as u32}] == center { flat += 1; }
+        }} true})() { points.push(xy{x,y}); }
+    }}
+    if points.len() < 4 { return Err(cross); }
     let points : Vec<_> = points.iter().map(|&a| (a, {
-        //points.iter().filter(|(b,_)| a!=b).map(|&(b,_)| (b, vector::sq(b-a))).min_by(|(_,a),(_,b)| f32::total_cmp(a, b)).unwrap().0
         let mut p = points.iter().filter(|&b| a!=*b).copied().collect::<Box<_>>();
         assert!(p.len() >= 3);
         let closest = if p.len() > 3 { let (closest, _, _) = p.select_nth_unstable_by_key(3, |p| vector::sq(p-a)); &*closest } else { &p };
@@ -571,4 +228,83 @@ pub fn checkerboard2(source: Image<&[u16]>, max_distance: u32, debug: &'static s
         walk(&points, &mut connected, p);
         connected
     }).max_by_key(|g| g.len()).unwrap())
+}
+
+pub fn refine(high: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static str) -> Result<[vec2; 4],(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)> {
+    let cross = cross_response(high.as_ref());
+
+    for _ in 0..1 {
+        let grid = {
+            let cross = &cross;
+            Image::from_iter(xy{x:8,y:6},
+          (1..=6).map(|y|
+                    (1..=8).map(move |x| {
+                        let xy{x, y} = xy{x: x as f32/9., y: y as f32/7.};
+                        let [A,B,C,D] = points.clone();
+                        let p = y*(x*A+(1.-x)*B) + (1.-y)*(x*D+(1.-x)*C);
+                        let p = xy{x: p.x.round() as u32, y: p.y.round() as u32,};
+                        let (p,_) = (p.y-R..p.y+R).map(|y| (p.x-R..p.x+R).map(move |x| xy{x,y})).flatten().map(|p| (p, cross[p])).max_by_key(|(_,v)| *v).unwrap_or((p,0));
+                        p
+                    }
+                    )
+                ).flatten()
+            )
+        };
+        let ref ref_grid = grid;
+        let rows = (0..grid.size.y).map(|y| (0..grid.size.x).map(move |x| ref_grid[xy{x,y}]));
+        let columns = (0..grid.size.x).map(|x| (0..grid.size.y).map(move|y| ref_grid[xy{x,y}]));
+        let column = rows.map(|row| row.map(|p| vec2::from(p)).sum::<vec2>()/8.).collect::<Box<_>>();
+        let row = columns.map(|column| column.map(|p| vec2::from(p)).sum::<vec2>()/6.).collect::<Box<_>>();
+        let row_axis = row.last().unwrap()-row[0];
+        let column_axis = column.last().unwrap()-column[0];
+        let center = grid.iter().map(|&p| vec2::from(p)).sum::<vec2>()/(8.*6.);
+        if debug != "" { return Err((center, row, column, grid, row_axis, column_axis, cross)); }
+        points = [xy{x:-1./2.,y:-1./2.},xy{x:1./2.,y:-1./2.},xy{x:1./2.,y:1./2.},xy{x:-1./2.,y:1./2.}].map(|xy{x,y}| center + x*row_axis + y*column_axis);
+    }
+    Ok(points)
+}
+
+pub fn cross(target: &mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, color:u32) {
+    let mut plot = |dx,dy| {
+        let Some(p) = (int2::from(scale*p)+xy{x: dx, y: dy}).try_unsigned() else {return};
+        if let Some(p) = target.get_mut(offset+p) { *p = color; }
+    };
+    for dy in -64..64 { plot(0, dy); }
+    for dx in -64..64 { plot(dx, 0); }
+}
+
+pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, debug: &'static str, target: &mut Image<&mut [u32]>) -> Option<[vec2; 4]> { 
+    use super::image::scale;
+    match checkerboard_quad(nir.as_ref(), black, debug) {
+        Err(image) => { scale(target, image.as_ref()); None }
+        Ok(points) => {
+            let points = match refine(nir.as_ref(), points, 0/*128*/, debug) {
+                Err((center, row, column, grid, row_axis, column_axis, corner)) => {
+                    let (_, scale, offset) = scale(target, corner.as_ref());
+                    cross(target, scale, offset, center, 0xFFFFFF);
+                    for x in 0..grid.size.x {
+                        cross(target, scale, offset, row[x as usize], 0x00FF00);
+                    }
+                    for y in 0..grid.size.y {
+                        cross(target, scale, offset, column[y as usize], 0x00FF00);
+                        for x in 0..grid.size.x {
+                            cross(target, scale, offset, grid[xy{x,y}].into(), 0x00FFFF);
+                            let xy{x, y} = xy{x: x as f32/7.,  y: y as f32/5.};
+                            let xy{x, y} = xy{x: x-1./2., y: y-1./2.};
+                            let p = center + x*row_axis + y*column_axis;
+                            cross(target, scale, offset, p, 0xFF00FF); // purple
+                        }
+                    }
+                    return None;
+                }
+                Ok(points) => points
+            };
+            if debug=="checkerboard" {
+                let (_, scale, offset) = scale(target, nir.as_ref());
+                for (i,&p) in points.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
+                return None;
+            }
+            Some(points)
+        }
+    }
 }

@@ -1,13 +1,4 @@
-use {vector::{xy, uint2, minmax, MinMax}, image::Image};
-
-#[allow(dead_code)] pub fn copy(target: &mut Image<&mut [u32]>, source: Image<&[u8]>) {
-    let size = vector::component_wise_min(source.size, target.size);
-    for y in 0..size.y {
-        for x in 0..size.x {
-            unsafe{(&mut target[xy{x,y}] as *mut _ as *mut std::simd::u8x4).write_unaligned(std::simd::u8x4::splat(source[xy{x,y}]))};
-        }
-    }
-}
+use {vector::{xy, uint2, int2, vec2, minmax, MinMax}, image::Image};
 
 pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (uint2, u32, uint2) {
     let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
@@ -149,3 +140,16 @@ pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image
     }}
     (scale, offset)
 }
+
+pub fn open(path: impl AsRef<std::path::Path>) -> Image<Box<[u16]>> {
+    #[cfg(not(feature="png"))] unimplemented!();
+    #[cfg(feature="png")] {
+        let image = png::open(path).unwrap();
+        Image::new(vector::xy{x: image.width(), y: image.height()}, image.into_luma8().into_raw().into_boxed_slice().iter().map(|&u8| u8 as u16).collect())
+    }
+}
+
+fn cast_slice_box<A,B>(input: Box<[A]>) -> Box<[B]> { // ~bytemuck but allows unequal align size
+    unsafe{Box::<[B]>::from_raw({let len=std::mem::size_of::<A>() * input.len() / std::mem::size_of::<B>(); core::slice::from_raw_parts_mut(Box::into_raw(input) as *mut B, len)})}
+}
+pub fn raw(size: uint2, path: impl AsRef<std::path::Path>) -> Image<Box<[u16]>> { Image::new(size, cast_slice_box(std::fs::read(path).unwrap().into_boxed_slice())) }
