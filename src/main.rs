@@ -61,6 +61,36 @@ fn refine(source: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static 
 }
 
 fn main() {
+    struct Hololens {stream: ffmpeg::format::Input, decoder: ffmpeg::codec::decoder::Video}
+    impl Hololens {
+        fn new() -> Self {
+            use ffmpeg::{format, media::Type, codec::context::Context as CodecContext, util::frame::video::Video};
+            ffmpeg::init().unwrap();
+            //let mut stream = format::input(&"../live_high.mp4").unwrap();
+            let mut stream = format::input(&"https://192.168.0.101/api/holographic/stream/live_high.mp4?holo=false&pv=true&mic=false&loopback=false&RenderFromCamera=false").unwrap();
+            let video = stream.streams().best(Type::Video).unwrap();
+            let video_stream_index = video.index();
+            let codec = CodecContext::from_parameters(video.parameters())?;
+            let mut decoder = codec.decoder().video()?;
+            Self{stream, decoder}
+        }
+        fn next(&mut self) -> Image<Box<[u16]>> {
+            let mut frame = ffmpeg::util::frame::video::Video::empty();
+            for (stream, packet) in self.stream.packets() {
+                if stream.index() == video_stream_index {
+                    self.decoder.send_packet(&packet)?;
+                    while self.decoder.receive_frame(&mut frame).is_ok() {}
+                }
+            }
+            /*let mut image = vec![0u16; (width*height) as usize];
+            for y in 0..height { for x in 0..width {
+                image[(y*width+x) as usize] = (frame.data(0)[(y*frame.height()/height*frame.width()+x*frame.width()/width) as usize] as u16) << 8; 
+            }}*/
+            Image::from_iter(frame.width(), frame.height(), frame.data(0).iter().map(|u8| u8 as u16))
+        }
+    }
+    let hololens = /*std::env::args().any(|a| a=="hololens").*/true.then(Hololens::new);
+
     #[cfg(not(feature="u3v"))] struct NIR;
     #[cfg(feature="u3v")] struct NIR{
         #[allow(dead_code)] camera: cameleon::Camera<cameleon::u3v::ControlHandle, cameleon::u3v::StreamHandle>,
@@ -240,7 +270,7 @@ fn main() {
                 }
             };
 
-            let quad = |points:&[uint2]| {
+            /*let quad = |points:&[uint2]| {
                 if points.len() < 4 { return None; }
                 let mut Q : Vec<_> = points.iter().map(|&uint2| vec2::from(uint2)).collect();
                 while Q.len() > 4 {
@@ -256,7 +286,7 @@ fn main() {
                 use vector::norm;
                 if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); }
                 Some(Q)
-            };
+            };*/
         
             /*let points = match checkerboard(nir.as_ref(), 256, if self.debug_which=="nir" {self.debug} else{""}) {
                 Ok(points) => points,
@@ -559,12 +589,12 @@ fn main() {
             let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
             let A = mul(inverse(M[1]), mul(A, M[0]));
 
-            let (_, IR_scale, IR_offset) = scale(target, ir.as_ref()); // FIXME
+            //let (_, IR_scale, IR_offset) = scale(target, ir.as_ref()); // FIXME
             let (target_size, scale, offset) = scale(target, nir.as_ref());
             /*for (i,&p) in P_nir.iter().enumerate() { cross(target, scale, offset, p, [0x00_0000,0x00_00FF,0x00_FF00,0x00_FFFF][i]); }    
             for (i,&p) in P_ir.iter().enumerate() { cross(target, IR_scale, IR_offset, p, [0xFF_0000,0xFF_00FF,0xFF_FF00,0xFF_FFFFF][i]); }*/
             for (i,&p) in P_nir.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
-            for (i,&p) in P_ir.iter().enumerate() { cross(target, IR_scale, IR_offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
+            //for (i,&p) in P_ir.iter().enumerate() { cross(target, IR_scale, IR_offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
             affine_blit(target, target_size, ir.as_ref(), A, nir.size);
             Ok(())
         }
@@ -608,5 +638,5 @@ fn main() {
             Ok(/*self.nir.is_some()||self.ir.is_some()*/true)
         }
     }
-    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"checkerboard", debug_which: "nir"}).unwrap();
+    ui::run("Checkerboard", &mut View{nir, ir, last_frame: [None, None], debug:"", debug_which: ""}).unwrap();
 }

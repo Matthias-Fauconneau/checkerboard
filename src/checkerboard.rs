@@ -488,7 +488,7 @@ pub fn checkerboard2(source: Image<&[u16]>, max_distance: u32, debug: &'static s
     for &pixel in source.iter() { histogram[pixel as usize] += 1; }
     type u40 = u64;
     let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
-    let mut threshold : u16 = 0;
+    //let mut threshold : u16 = 0;
     let mut maximum_variance = 0;
     type u24 = u32;
     let (mut background_count, mut background_sum) : (u24, u40)= (0, 0);
@@ -503,7 +503,7 @@ pub fn checkerboard2(source: Image<&[u16]>, max_distance: u32, debug: &'static s
         type u48 = u64;
         let variance = sq((foreground_sum as u64*background_count as u64 - background_sum as u64*foreground_count as u64) as u128)
                             / (foreground_count as u48*background_count as u48) as u128;
-        if variance >= maximum_variance { (threshold, maximum_variance, foreground_mean) = (i as u16, variance, (foreground_sum/foreground_count as u40) as u16); }
+        if variance >= maximum_variance { (/*threshold,*/ maximum_variance, foreground_mean) = (/*i as u16,*/ variance, (foreground_sum/foreground_count as u40) as u16); }
     }
     //let foreground_mode = threshold+histogram[threshold as usize..].iter().enumerate().max_by_key(|(_, &v)| v).unwrap().0 as u16;
     //assert!(foreground_mode < foreground_mean);
