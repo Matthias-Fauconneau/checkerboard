@@ -776,6 +776,7 @@ dependencies = [
 [[package]]
 name = "image"
 version = "0.0.0"
+source = "git+https://github.com/Matthias-Fauconneau/image#f060d90e5542b8f7a109fca3115aa3c44ff5dcab"
 dependencies = [
  "bytemuck",
  "num 0.0.0",
@@ -2019,6 +2020,7 @@ checksum = "497961ef93d974e23eb6f433eb5fe1b7930b659f06d12dec6fc44a8f554c0bba"
 [[package]]
 name = "ui"
 version = "0.0.0"
+source = "git+https://github.com/Matthias-Fauconneau/ui#30e6efe1a7570f081eca5c240ec22e4a2449c455"
 dependencies = [
  "bytemuck",
  "image 0.0.0",

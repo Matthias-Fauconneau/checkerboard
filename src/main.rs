@@ -56,18 +56,20 @@ impl ui::Widget for App {
         let P_ir = fit_rectangle(&points);
         if debug=="quads" { let (_, scale, offset) = scale(target, ir.as_ref()); for a in P_ir { cross(target, scale, offset, a, 0xFF00FF); } return Ok(())}
         
-        let P = [P_hololens, P_nir];
-        let M = P.map(|P| {
-            let center = P.into_iter().sum::<vec2>() / P.len() as f32;
-            let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();
-            [[scale.x, 0., -scale.x*center.x], [0., scale.y, -scale.y*center.y], [0., 0., 1.]]
-        });
-        let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
-        let A = mul(inverse(M[1]), mul(A, M[0]));
-
+        let map = |P:[[vec2; 4]; 2]| -> mat3 {
+            let M = P.map(|P| {
+                let center = P.into_iter().sum::<vec2>() / P.len() as f32;
+                let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();
+                [[scale.x, 0., -scale.x*center.x], [0., scale.y, -scale.y*center.y], [0., 0., 1.]]
+            });
+            let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
+            mul(inverse(M[1]), mul(A, M[0]))
+        };
+        
         let (target_size, scale, offset) = scale(target, hololens.as_ref());
         for (i,&p) in P_hololens.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
-        affine_blit(target, target_size, nir.as_ref(), A, hololens.size);
+        affine_blit(target, target_size, nir.as_ref(), map([P_hololens, P_nir]), hololens.size, 2);
+        affine_blit(target, target_size, ir.as_ref(), map([P_hololens, P_ir]), hololens.size, 1);
         Ok(())
     }
     fn event(&mut self, _: vector::size, _: &mut Option<ui::EventContext>, event: &ui::Event) -> ui::Result<bool> {

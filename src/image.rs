@@ -124,7 +124,7 @@ pub fn scale(target: &mut Image<&mut[u32]>, image: Image<&[u16]>) -> (uint2, f32
 use image::bgr8;
 
 use crate::matrix::{mat3, apply};
-pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image<&[u16]>, A: mat3, transform_target_size: uint2) -> (f32, uint2) {
+pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image<&[u16]>, A: mat3, transform_target_size: uint2, i: usize) -> (f32, uint2) {
     assert!(fit_size <= target.size);
     let offset = (target.size-fit_size)/2;
     let scale = transform_target_size.x as f32/fit_size.x as f32;
@@ -136,7 +136,7 @@ pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image
         if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
         let s = source[uint2::from(p)];
         let p = &mut target[xy{x, y}];
-        *p = {let mut p = bgr8::from(*p); p.g = ((s-min) as u32*0xFF/(max-min) as u32) as u8; p}.into();
+        *p = {let mut p = <[_; _]>::from(bgr8::from(*p)); p[i] = ((s-min) as u32*0xFF/(max-min) as u32) as u8; bgr8::from(p)}.into();
     }}
     (scale, offset)
 }
