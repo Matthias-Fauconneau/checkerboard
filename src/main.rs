@@ -48,7 +48,7 @@ impl ui::Widget for App {
         let nir = Camera::next_or_saved_or_start(&mut self.nir, &mut self.last_frame[1], "nir",xy{x:2592,y:1944});
         let debug = if self.debug_which=="nir" {self.debug} else{""};
         if debug=="original" { scale(target, nir.as_ref()); return Ok(()) }
-        let low = low_pass::<4/*12*/>(nir.as_ref());
+        let low = box_convolve::<4/*12*/>(nir.as_ref());
         if debug=="low" { scale(target, low.as_ref()); return Ok(()) }
         /*let Some(high) = self::high_pass(low.as_ref(), 42/*127*/, 0x1000) else { scale(target, low.as_ref()); return Ok(()) };
         if debug=="even" { scale(target, high.as_ref()); return Ok(()) }        

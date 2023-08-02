@@ -1,6 +1,6 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image};
 
-pub fn transpose_low_pass_1D_scale<const R: usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
+pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
     let mut transpose = Image::uninitialized(source.size.yx());
     assert!(R+1+R < (1<<4) && R+1+R > (1<<(4-1)));
     let stride = source.stride as usize;
@@ -46,20 +46,21 @@ pub fn transpose_low_pass_1D_scale<const R: usize>(source: Image<&[u16]>, factor
     transpose
 }
 
-pub fn transpose_low_pass_1D<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_low_pass_1D_scale::<R>(source, (1<<(16-4)) / (R+1+R) as u32) }
+pub fn transpose_box_convolve<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R>(source, (1<<(16-4)) / (R+1+R) as u32) }
 
-pub fn transpose_low_pass_1D_scale_minmax<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
-    let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
-    //assert!(min < max);
-    transpose_low_pass_1D_scale::<R>(source, (1<<(32-4)) / (max as u32*(R+1+R) as u32))
+pub fn transpose_box_convolve_scale_minmax<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
+    let mut max = 0;
+    let std::ops::Range{start: mut sample, end} = source.data.as_ptr_range();
+    unsafe{while sample < end { max = u16::max(max, *sample); sample = sample.add(1); }}
+    transpose_box_convolve_scale::<R>(source, (1<<(32-4)) / (max as u32*(R+1+R) as u32))
 }
 
-pub fn low_pass<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_low_pass_1D::<R>(transpose_low_pass_1D_scale_minmax::<R>(image).as_ref()) }
+pub fn box_convolve<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve::<R>(transpose_box_convolve_scale_minmax::<R>(image).as_ref()) }
 
 /*pub fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
     let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
     if !(min < max) { return None; }
-    let mut low_then_high = low_pass(image.as_ref(), R);
+    let mut low_then_high = box_convolve(image.as_ref(), R);
     low_then_high.as_mut().zip_map(&image, |&low, &p| {
         let high = (p-min) as u32*0xFFFF/(max-min) as u32;
         assert!(high <= 0xFFFF);
