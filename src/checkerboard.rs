@@ -5,30 +5,37 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
     assert!(R+1+R < (1<<4) && R+1+R > (1<<(4-1)));
     let stride = source.stride as usize;
     let height = source.size.y as usize;
-    //let stride : [_; R] = std::array::from_fn(|y| stride as usize*y);
-    let mut column = source.data.as_ptr();
-    let mut row : *mut u16 = transpose.data.as_mut_ptr();
+    assert!(height%32 == 0);
+    use std::simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, u16x32, u32x32};
+    let std::ops::Range{start, end} = source.data.as_ptr_range();
+    let [mut column, end] = [start, end].map(|p| p as *const u16x32);
+    let mut row = SIMD::splat(transpose.data.as_mut_ptr()).wrapping_add(SIMD::from_array(std::array::from_fn(|y| y*stride)));
     assert!(transpose.stride as usize == height);
-    for _x in 0..source.size.x { unsafe {
-        let first = *column as u32;
-        let mut sum = first*(R as u32);
+    let factor = SIMD::splat(factor);
+    for _x in 0..source.size.x/32 { unsafe {
+        let first = column.read().cast::<u32>();
+        let mut sum = first*SIMD::splat(R as u32);
+        let front = column.add(height).sub(R+1);
         let mut front = column;
-        for _y in 0..R { sum += *front as u32; front = front.add(stride); }
-        let end = row.add(height).sub(R+1);
+        for _y in 0..R { sum += front.read().cast::<u32>(); front = front.add(stride); }
+        //fn srl<T: std::simd::SimdElement, const N: usize>(a: SIMD<T,N>, count: u8) -> SIMD<T,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count) /*_mm512_srl_epi16(a, count)*/ }
+        fn srl<const N: usize>(a: SIMD<u32, N>, count: u8) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count as u32) /*_mm512_srl_epi16(a, count)*/ }
         for _y in 0..R {
-            sum += *front as u32;
+            sum += front.read().cast::<u32>();
             front = front.add(stride);
-            *row = (sum * factor >> (16-4)) as u16;
+            srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(row);
             sum -= first;
-            row = row.add(1);
+            row = row.wrapping_add(SIMD::splat(1));
         }
         let mut back = column;
-        while row < end { //for y in R..height-R-1*/
-            sum += *front as u32;
+        let mut last;
+        while front < end { //for y in R..height-R-1*/
+            last = front.read().cast::<u32>();
+            sum += last;
             front = front.add(stride);
-            *row = (sum * factor >> (16-4)) as u16;
-            row = row.add(1);
-            sum -= *back as u32;
+            srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(row);
+            row = row.wrapping_add(SIMD::splat(1));
+            sum -= back.read().cast::<u32>();
             back = back.add(stride);
         }
         // height-R-1
