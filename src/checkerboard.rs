@@ -1,41 +1,65 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image};
 
-// FIXME: minmax once, rescale once
-pub fn transpose_low_pass_1D(source: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> {
-    let mut transpose = Image::uninitialized(source.size.yx());
-    // /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
+pub fn transpose_low_pass_1D_scale<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
+    let mut transpose = Image::uninitialized(source.size.yx());   
     let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
-    if !(min < max) { return transpose;}
+    if !(min < max) { return transpose; }
+    //let bias = min as u32*(R+1+R) as u32;
+    assert!(R+1+R < (1<<4) && R+1+R > (1<<(4-1)), "{R}");
+    let factor : u32 = (1<<(32-4)) / ((max/*-min*/) as u32*(R+1+R) as u32);
+    //let factor : u32 = (0xFFFF0000>>3) / ((max/*-min*/) as u32*(R+1+R) as u32);
     for y in 0..source.size.y {
         let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
         for x in 0..R { sum += source[xy{x, y}] as u32; }
         for x in 0..R {
             sum += source[xy{x: x+R, y}] as u32;
-            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            //transpose[xy{x: y, y: x}] = ((sum-bias) * factor >> (16-3)) as u16;
+            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
             sum -= source[xy{x: 0, y}] as u32;
         }
         for x in R..source.size.x-R {
             sum += source[xy{x: x+R, y}] as u32;
-            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-            //transpose[xy{x: y, y: x}] = (sum / (R+1+R) as u32) as u16;
-            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
             sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
         }
         for x in source.size.x-R..source.size.x {
             sum += source[xy{x: source.size.x-1, y}] as u32;
-            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-            //transpose[xy{x: y, y: x}] = (sum / (R+1+R) as u32) as u16;
-            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
             sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
         }
     }
     transpose
 }
 
-pub fn low_pass(image: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> { transpose_low_pass_1D(transpose_low_pass_1D(image, R).as_ref(), R) }
+pub fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
+    let mut transpose = Image::uninitialized(source.size.yx());   
+    assert!(R+1+R < (1<<4) && R+1+R > (1<<(4-1)));
+    /*const*/let factor : u32 = (1<<(16-3)) / (R+1+R) as u32;
+    for y in 0..source.size.y {
+        let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
+        for x in 0..R { sum += source[xy{x, y}] as u32; }
+        for x in 0..R {
+            sum += source[xy{x: x+R, y}] as u32;
+            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
+            sum -= source[xy{x: 0, y}] as u32;
+        }
+        for x in R..source.size.x-R {
+            sum += source[xy{x: x+R, y}] as u32;
+            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
+            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        }
+        for x in source.size.x-R..source.size.x {
+            sum += source[xy{x: source.size.x-1, y}] as u32;
+            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
+            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        }
+    }
+    transpose
+}
 
-pub fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
+pub fn low_pass<const R: u32>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_low_pass_1D::<R>(transpose_low_pass_1D::<R>(image).as_ref()) }
+
+/*pub fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
     let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
     if !(min < max) { return None; }
     let mut low_then_high = low_pass(image.as_ref(), R);
@@ -47,7 +71,7 @@ pub fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<B
         div
     });
     Some(low_then_high)
-}
+}*/
 
 fn otsu(image: Image<&[u16]>) -> u16 {
     assert!(image.len() < 1<<24);
@@ -165,7 +189,7 @@ pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, 
     if debug=="binary" { return Err(binary16(high.as_ref(), threshold, false)); }
     let erode = erode(high.as_ref(), erode_steps, threshold);
     if debug=="erode" { return Err(Image::from_iter(erode.size, erode.iter().map(|&p| (p as u16)<<8))); }
-    let ref contours = imageproc::contours::find_contours::<u16>(&png::GrayImage::from_vec(erode.size.x, erode.size.y, erode.data.into_vec()).unwrap());
+    let ref contours = imageproc::contours::find_contours::<u16>(&imagers::GrayImage::from_vec(erode.size.x, erode.size.y, erode.data.into_vec()).unwrap());
     if debug=="contour" { let mut target = Image::zero(erode.size); for contour in contours { for p in &contour.points { target[xy{x: p.x as u32, y: p.y as u32}] = 0xFFFF; }} return Err(target); }
     let quads = quads(contours, sq(min_side));
     if debug=="quads" { let mut target = Image::zero(erode.size);
@@ -179,7 +203,7 @@ pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, 
     Ok(long_edge_first(top_left_first(Q)))
 }
 
-fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
+/*fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
     let mut cross = Image::zero(high.size);
     const R : u32 = 3;
     for y in R..high.size.y-R {
@@ -312,7 +336,7 @@ pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usi
             Some(points)
         }
     }
-}
+}*/
 
 pub fn fit_rectangle(points: &[uint2]) -> [vec2; 4] {
     let area = |[a,b,c,d]:[vec2; 4]| {let abc = vector::cross2(b-a,c-a); let cda = vector::cross2(d-c,a-c); (abc+cda)/2.};

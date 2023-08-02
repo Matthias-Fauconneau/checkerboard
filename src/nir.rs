@@ -1,14 +1,9 @@
-#[cfg(not(feature="u3v"))] pub struct NIR;
-#[cfg(feature="u3v")] pub struct NIR{
-    #[allow(dead_code)] camera: cameleon::Camera<cameleon::u3v::ControlHandle, cameleon::u3v::StreamHandle>,
+pub struct NIR{
+    #[allow(unused)] camera: cameleon::Camera<cameleon::u3v::ControlHandle, cameleon::u3v::StreamHandle>,
     payload_receiver: cameleon::payload::PayloadReceiver
 }
 use image::{Image, xy};
-#[cfg(not(feature="u3v"))] impl super::Camera for NIR {
-    fn new() -> Self { Self }
-    fn next(&mut self) -> Image<Box<[u16]>> { panic!("!u3v") }
-}
-#[cfg(feature="u3v")] impl super::Camera for NIR {
+impl super::Camera for NIR {
     fn new() -> Self {
         let mut cameras = cameleon::u3v::enumerate_cameras().unwrap();
         //for camera in &cameras { println!("{:?}", camera.info()); }

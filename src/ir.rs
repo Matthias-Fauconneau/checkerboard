@@ -1,11 +1,6 @@
-#[cfg(not(feature="uvc"))] pub struct IR;
-#[cfg(feature="uvc")] pub struct IR(*mut uvc::uvc_stream_handle_t);
+pub struct IR(*mut uvc::uvc_stream_handle_t);
 use image::{Image, xy};
-#[cfg(not(feature="uvc"))] impl super::Camera for IR {
-    fn new() -> Self { Self }
-    fn next(&mut self) -> Image<Box<[u16]>> { panic!("!uvc") }
-}
-#[cfg(feature="uvc")] impl super::Camera for IR {
+impl super::Camera for IR {
     fn new() -> Self {
         use std::ptr::null_mut;
         let mut uvc = null_mut();
