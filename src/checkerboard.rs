@@ -304,7 +304,7 @@ pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usi
                 }
                 Ok(points) => points
             };
-            if debug=="checkerboard" {
+            if debug=="z" {
                 let (_, scale, offset) = scale(target, nir.as_ref());
                 for (i,&p) in points.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
                 return None;

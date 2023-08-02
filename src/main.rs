@@ -76,12 +76,16 @@ impl ui::Widget for App {
         if let &ui::Event::Key(key) = event {
             if ['⎙','\u{F70C}'].contains(&key) {
                 println!("⎙");
-                if self.last_frame.iter_mut().zip(["hololens","nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| write_raw(name, image.as_ref())).count() == 0 { self.ir = Some(IR::new()); }
                 write("checkerboard.png", {let mut target = Image::uninitialized(xy{x: 2592, y:1944}); let size = target.size; self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap(); target}.as_ref());
+                if self.last_frame.iter_mut().zip(["hololens","nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| write_raw(name, image.as_ref())).count() == 0 {
+                    if self.hololens.is_none() { self.hololens = Some(Hololens::new()); }
+                    if self.nir.is_none() { self.nir = Some(NIR::new()); }
+                    if self.ir.is_none() { self.ir = Some(IR::new()); }
+                }
             } else {
                 fn starts_with<'t>(words: &[&'t str], key: char) -> Option<&'t str> { words.into_iter().find(|word| key==word.chars().next().unwrap()).copied() }
                 if let Some(word) = starts_with(&["hololens","nir","ir"], key) { self.debug_which = word }
-                else if let Some(word) = starts_with(&["binary","contour","response","erode","?","low","max","original","checkerboard","points","quads","source"], key) { self.debug = word; }
+                else if let Some(word) = starts_with(&["binary","contour","response","erode","?","low","max","original","z","points","quads","source"], key) { self.debug = word; }
                 else { self.debug=""; self.debug_which=""; }
             }
             Ok(true)
