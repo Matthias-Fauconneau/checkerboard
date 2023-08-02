@@ -1,63 +1,60 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image};
 
-pub fn transpose_low_pass_1D_scale<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
-    let mut transpose = Image::uninitialized(source.size.yx());   
-    let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
-    if !(min < max) { return transpose; }
-    //let bias = min as u32*(R+1+R) as u32;
-    assert!(R+1+R < (1<<4) && R+1+R > (1<<(4-1)), "{R}");
-    let factor : u32 = (1<<(32-4)) / ((max/*-min*/) as u32*(R+1+R) as u32);
-    //let factor : u32 = (0xFFFF0000>>3) / ((max/*-min*/) as u32*(R+1+R) as u32);
-    for y in 0..source.size.y {
-        let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
-        for x in 0..R { sum += source[xy{x, y}] as u32; }
-        for x in 0..R {
-            sum += source[xy{x: x+R, y}] as u32;
-            //transpose[xy{x: y, y: x}] = ((sum-bias) * factor >> (16-3)) as u16;
-            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
-            sum -= source[xy{x: 0, y}] as u32;
-        }
-        for x in R..source.size.x-R {
-            sum += source[xy{x: x+R, y}] as u32;
-            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
-            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
-        }
-        for x in source.size.x-R..source.size.x {
-            sum += source[xy{x: source.size.x-1, y}] as u32;
-            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
-            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
-        }
-    }
-    transpose
-}
-
-pub fn transpose_low_pass_1D<const R: u32>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
-    let mut transpose = Image::uninitialized(source.size.yx());   
+pub fn transpose_low_pass_1D_scale<const R: usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
+    let mut transpose = Image::uninitialized(source.size.yx());
     assert!(R+1+R < (1<<4) && R+1+R > (1<<(4-1)));
-    /*const*/let factor : u32 = (1<<(16-3)) / (R+1+R) as u32;
-    for y in 0..source.size.y {
-        let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
-        for x in 0..R { sum += source[xy{x, y}] as u32; }
-        for x in 0..R {
-            sum += source[xy{x: x+R, y}] as u32;
-            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
-            sum -= source[xy{x: 0, y}] as u32;
+    let stride = source.stride as usize;
+    let height = source.size.y as usize;
+    //let stride : [_; R] = std::array::from_fn(|y| stride as usize*y);
+    let mut column = source.data.as_ptr();
+    let mut row : *mut u16 = transpose.data.as_mut_ptr();
+    assert!(transpose.stride as usize == height);
+    for _x in 0..source.size.x { unsafe {
+        let first = *column as u32;
+        let mut sum = first*(R as u32);
+        let mut front = column;
+        for _y in 0..R { sum += *front as u32; front = front.add(stride); }
+        let end = row.add(height).sub(R+1);
+        for _y in 0..R {
+            sum += *front as u32;
+            front = front.add(stride);
+            *row = (sum * factor >> (16-4)) as u16;
+            sum -= first;
+            row = row.add(1);
         }
-        for x in R..source.size.x-R {
-            sum += source[xy{x: x+R, y}] as u32;
-            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
-            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        let mut back = column;
+        while row < end { //for y in R..height-R-1*/
+            sum += *front as u32;
+            front = front.add(stride);
+            *row = (sum * factor >> (16-4)) as u16;
+            row = row.add(1);
+            sum -= *back as u32;
+            back = back.add(stride);
         }
-        for x in source.size.x-R..source.size.x {
-            sum += source[xy{x: source.size.x-1, y}] as u32;
-            transpose[xy{x: y, y: x}] = (sum * factor >> (16-4)) as u16;
-            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        // height-R-1
+        let last = *front as u32;
+        let end = end.add(R+1);
+        while row < end { // for y in height-R-1..height
+            sum += last;
+            *row = (sum * factor >> (16-4)) as u16;
+            row = row.add(1);
+            sum -= *back as u32;
+            back = back.add(stride);
         }
-    }
+        column = column.add(1);
+    }}
     transpose
 }
 
-pub fn low_pass<const R: u32>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_low_pass_1D::<R>(transpose_low_pass_1D::<R>(image).as_ref()) }
+pub fn transpose_low_pass_1D<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_low_pass_1D_scale::<R>(source, (1<<(16-4)) / (R+1+R) as u32) }
+
+pub fn transpose_low_pass_1D_scale_minmax<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
+    let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
+    //assert!(min < max);
+    transpose_low_pass_1D_scale::<R>(source, (1<<(32-4)) / (max as u32*(R+1+R) as u32))
+}
+
+pub fn low_pass<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_low_pass_1D::<R>(transpose_low_pass_1D_scale_minmax::<R>(image).as_ref()) }
 
 /*pub fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
     let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
