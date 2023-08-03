@@ -3,49 +3,81 @@ use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinM
 pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
     let mut transpose = Image::uninitialized(source.size.yx());
     assert!(R+1+R < (1<<4) && R+1+R > (1<<(4-1)));
-    let stride = source.stride as usize;
-    let height = source.size.y as usize;
-    assert!(height%32 == 0, "{height}");
-    use std::simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, u16x32, u32x32};
-    let std::ops::Range{start, end} = source.data.as_ptr_range();
-    let [mut column, end] = [start, end].map(|p| p as *const u16x32);
-    let mut row = SIMD::splat(transpose.data.as_mut_ptr()).wrapping_add(SIMD::from_array(std::array::from_fn(|y| y*stride)));
-    assert!(transpose.stride as usize == height);
-    let factor = SIMD::splat(factor);
-    for _x in 0..source.size.x/32 { unsafe {
-        let first = column.read().cast::<u32>();
-        let mut sum = first*SIMD::splat(R as u32);
-        let mut front = column;
-        for _y in 0..R { sum += front.read().cast::<u32>(); front = front.add(stride); }
-        //fn srl<T: std::simd::SimdElement, const N: usize>(a: SIMD<T,N>, count: u8) -> SIMD<T,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count) /*_mm512_srl_epi16(a, count)*/ }
-        fn srl<const N: usize>(a: SIMD<u32, N>, count: u8) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count as u32) /*_mm512_srl_epi16(a, count)*/ }
-        for _y in 0..R {
-            sum += front.read().cast::<u32>();
-            front = front.add(stride);
-            srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(row);
-            sum -= first;
-            row = row.wrapping_add(SIMD::splat(1));
+    assert!(source.size.x%32 == 0, "{}", source.size.x); // == transpose height
+    let source_stride = source.stride as usize;
+    assert!(transpose.stride == transpose.size.x);
+    let transpose_stride = transpose.stride as usize;
+    if true { // Safe "SIMD"
+        let mut rows : [_; 32] = std::array::from_fn(|y| y*transpose_stride);
+        let mut column = 0;
+        let source_first_line_end = source.size.x as usize;
+        let end = source.len()-source_stride+source.size.x as usize;
+        while column < source_first_line_end {
+            let mut front = column;
+            let mut y = 0;
+            while front < end { //for y in 0..height
+                for k in 0..32 {
+                    let value = source.data[front+k]; 
+                    if rows[k] >= transpose.data.len() { panic!("{:?}", dbg!(column, source_first_line_end, front, source_stride, end, rows, transpose_stride, k, y, source.size.y)); }
+                    transpose.data[rows[k]] = value;
+                }
+                front += source_stride; y+=1;
+                for k in 0..32 { rows[k] += 1; }
+            }
+            assert_eq!(y, source.size.y,"{:?}", dbg!(column, front, end, source_stride));
+            column += 32;
+            for k in 0..32 { rows[k] += (32-1)*transpose_stride; } // width==stride
         }
-        let mut back = column;
-        let mut last = first;
-        while front < end { //for y in R..height-R
-            last = front.read().cast::<u32>();
-            sum += last;
-            front = front.add(stride);
-            srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(row);
-            sum -= back.read().cast::<u32>();
-            back = back.add(stride);
-            row = row.wrapping_add(SIMD::splat(1));
-        }
-        while back < end { // for y in height-R..height
-            sum += last;
-            srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(row);
-            sum -= back.read().cast::<u32>();
-            back = back.add(stride);
-            row = row.wrapping_add(SIMD::splat(1));
-        }
-        column = column.add(1);
-    }}
+    } else {
+        let std::ops::Range{start, end} = source.data.as_ptr_range();
+        let [mut column, end] = [start, end].map(|p| p as *const u16x32);
+        use std::simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, u16x32, u32x32};
+        let mut rows = SIMD::splat(transpose.data.as_mut_ptr()).wrapping_add(SIMD::from_array(std::array::from_fn(|y| y*transpose_stride)));
+        assert!(transpose_stride == source.size.y as usize);
+        //let factor = SIMD::splat(factor);
+        const U16 : usize = std::mem::size_of::<u16>();
+        let source_first_line_end = unsafe{column.byte_add(source.size.x as usize*U16)};
+        while column < source_first_line_end /*for _x in 0..source.size.x/32*/ { unsafe {
+            /*let first = column.read().cast::<u32>();
+            let mut sum = first*SIMD::splat(R as u32);
+            let mut front = column;
+            for _y in 0..R { sum += front.read().cast::<u32>(); front = front.byte_add(stride*U16); }
+            fn srl<const N: usize>(a: SIMD<u32, N>, count: u8) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count as u32) }
+            for _y in 0..R {
+                sum += front.read().cast::<u32>();
+                front = front.byte_add(stride*U16);
+                srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(row);
+                sum -= first;
+                row = row.wrapping_add(SIMD::splat(1));
+            }
+            let mut back = column;
+            let mut last = first;
+            while front < end { //for y in R..height-R
+                last = front.read().cast::<u32>();
+                sum += last;
+                front = front.byte_add(stride*U16);
+                srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(row);
+                sum -= back.read().cast::<u32>();
+                back = back.byte_add(stride*U16);
+                row = row.wrapping_add(SIMD::splat(1));
+            }
+            while back < end { // for y in height-R..height
+                sum += last;
+                srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(row);
+                sum -= back.read().cast::<u32>();
+                back = back.byte_add(stride*U16);
+                row = row.wrapping_add(SIMD::splat(1));
+            }*/
+            let mut front = column;
+            while front < end { //for y in 0..height
+                front.read().scatter_ptr(rows);
+                front = front.byte_add(source_stride*U16);
+                rows = rows.wrapping_add(SIMD::splat(1));
+            }
+            column = column.byte_add(32*U16);
+            rows = rows.wrapping_add(SIMD::splat((32-1)*transpose_stride)); // width==stride
+        }}
+    }
     transpose
 }
 
@@ -59,6 +91,7 @@ pub fn transpose_box_convolve_scale_minmax<const R: usize>(source: Image<&[u16]>
 }
 
 pub fn box_convolve<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve::<R>(transpose_box_convolve_scale_minmax::<R>(image).as_ref()) }
+//pub fn box_convolve<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve::<R>(image) }
 
 /*pub fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
     let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
