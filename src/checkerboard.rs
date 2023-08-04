@@ -99,24 +99,36 @@ pub fn transpose_box_convolve<const R: usize>(source: Image<&[u16]>) -> Image<Bo
 
 pub fn transpose_box_convolve_scale_max<const R: usize>(source: Image<&[u16]>, max: u16) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R>(source, (1<<(32-headroom(R))) / (max as u32*(R+1+R) as u32)) }
 
-pub fn box_convolve<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { 
+pub fn blur<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { 
     let max = max(image.data);
     let x = transpose_box_convolve_scale_max::<R>(image, max);
     transpose_box_convolve::<R>(x.as_ref())
 }
 
-pub fn high_pass<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Option<Image<Box<[u16]>>> {
+pub fn normalize<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u16]>> {
     let max = max(image.data);
     let x = transpose_box_convolve_scale_max::<R>(image.as_ref(), max);
-    let mut low_then_high = transpose_box_convolve::<R>(x.as_ref());
-    low_then_high.as_mut().zip_map(&image, |&low, &p| {
-        let high = p as u32*0xFFFF/max as u32;
-        assert!(high <= 0xFFFF);
-        let low = low.max(threshold);
-        let div = ((high*0xFFFF/low as u32)>>3) as u16;
-        div
+    let mut blur_then_normal = transpose_box_convolve::<R>(x.as_ref());
+    assert_eq!(image.stride, blur_then_normal.stride);
+    time("",||{
+        let max = max as u32;
+        let mut blur_then_normal = blur_then_normal.as_mut_ptr();
+        let std::ops::Range{start: mut image, end} = image.as_ptr_range();
+        while image < end { unsafe {
+            {
+                let low = *blur_then_normal;
+                let low = low.max(threshold);
+                let image = *image as u32;
+                let normal = ((image<<16)/((max*low as u32)>>16))>>3; // 32bit precision should be enough
+                //>>3: rescale to prevent amplified bright high within dark low from clipping (FIXME: fixed rescale either quantize too much or clip)
+                assert!(normal < 0x10000);
+                *blur_then_normal = normal as u16;
+            }
+            blur_then_normal = blur_then_normal.add(1);
+            image = image.add(1);
+        }}
     });
-    Some(low_then_high)
+    blur_then_normal
 }
 
 fn otsu(image: Image<&[u16]>) -> u16 {

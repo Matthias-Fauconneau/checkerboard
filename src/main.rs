@@ -33,7 +33,7 @@ struct App {
     debug_which: &'static str,
     debug: &'static str,
 }
-impl App { fn new() -> Self { Self{#[cfg(feature="hololens")] hololens: None, nir: /*None*/Some(NIR::new()), #[cfg(feature="ir")] ir: None, last_frame: [None, None, None], debug_which: "nir", debug:"even"}}}
+impl App { fn new() -> Self { Self{#[cfg(feature="hololens")] hololens: None, nir: /*None*/Some(NIR::new()), #[cfg(feature="ir")] ir: None, last_frame: [None, None, None], debug_which: "visible", debug:"normalize"}}}
 impl ui::Widget for App {
     fn size(&mut self, _: size) -> size { xy{x:2592,y:1944} }
     fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
@@ -48,12 +48,12 @@ impl ui::Widget for App {
         let nir = Camera::next_or_saved_or_start(&mut self.nir, &mut self.last_frame[1], "nir",xy{x:2592,y:1944});
         let nir = {let size = nir.size/128*128; nir.slice((nir.size-size)/2, size)};
         //let nir = {let x = nir.size.x/64*64; nir.slice(xy{x: (nir.size.x-x)/2, y: 0}, xy{x, y: nir.size.y})}; // Both dimensions need to be aligned because of transpose (FIXME: only align stride+height)
-        let debug = if self.debug_which=="nir" {self.debug} else{""};
+        let debug = if self.debug_which=="visible" {self.debug} else{""};
         if debug=="original" { scale(target, nir.as_ref()); return Ok(()) }
-        let low = box_convolve::<4>(nir.as_ref());
-        if debug=="low" { scale(target, low.as_ref()); return Ok(()) }
-        let Some(high) = self::high_pass::<42>(low.as_ref(), 0x1000) else { scale(target, low.as_ref()); return Ok(()) };
-        if debug=="even" { scale(target, high.as_ref()); return Ok(()) }        
+        let low = blur::<4>(nir.as_ref());
+        if debug=="blur" { scale(target, low.as_ref()); return Ok(()) }
+        let high = self::normalize::<42>(low.as_ref(), 0x1000);
+        if debug=="normalize" { scale(target, high.as_ref()); return Ok(()) }        
         //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 9, 64., debug, target)  else { return Ok(()) };
 
         /*let ir = Camera::next_or_saved_or_start(&mut self.ir, &mut self.last_frame[2], "ir",xy{x:256,y:192});
@@ -97,8 +97,8 @@ impl ui::Widget for App {
                 }
             } else {
                 fn starts_with<'t>(words: &[&'t str], key: char) -> Option<&'t str> { words.into_iter().find(|word| key==word.chars().next().unwrap()).copied() }
-                if let Some(word) = starts_with(&[/*"hololens",*/"nir"/*,"ir"*/], key) { self.debug_which = word }
-                else if let Some(word) = starts_with(&["binary","contour","response","erode","?","low","max","original","z","points","quads","source"], key) { self.debug = word; }
+                if let Some(word) = starts_with(&[/*"hololens",*/"visible"/*,"ir"*/], key) { self.debug_which = word }
+                else if let Some(word) = starts_with(&["binary","contour","response","erode","normalize","low","max","original","z","points","quads","source"], key) { self.debug = word; }
                 else { self.debug_which=""; self.debug="";  }
                 context.set_title(&format!("{} {}", self.debug_which, self.debug));
             }
@@ -106,4 +106,6 @@ impl ui::Widget for App {
         } else { Ok(/*self.hololens.is_some() ||*/ self.nir.is_some() /*||self.ir.is_some()*/) }
     }
 }
-fn main() -> ui::Result { ui::run("Checkerboard", &mut App::new()) }
+#[cfg(debug_assertions)] const TITLE: &'static str = "#[cfg(debug_assertions)]";
+#[cfg(not(debug_assertions))] const TITLE: &'static str = "Checkerboard";
+fn main() -> ui::Result { ui::run(TITLE, &mut App::new()) }
