@@ -113,24 +113,38 @@ pub fn normalize<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Image<
     assert_eq!(image.stride, blur_then_normal.stride);
     time("",||{
         let max = SIMD::splat(max as u32);
-        let mut blur_then_normal = blur_then_normal.as_mut_ptr();
-        let std::ops::Range{start: mut image, end} = image.as_ptr_range();
-        let mut blur_then_normal = blur_then_normal as *mut u16x32;
-        let [mut image, end] = [image, end].map(|p| p as *const u16x32);
-        let threshold = SIMD::splat(threshold);
-        while image < end { unsafe {
-            {
-                let low = blur_then_normal.read();
-                let low = low.simd_max(threshold).cast::<u32>();
-                let image = image.read().cast::<u32>();
-                let normal = srl(sll(image, 16)/srl(max*low, 16), 3); // 32bit precision should be enough
-                //>>3: rescale to prevent amplified bright high within dark low from clipping (FIXME: fixed rescale either quantize too much or clip)
-                //assert!(normal < 0x10000);
-                *blur_then_normal = normal.cast::<u16>();
+        let ref task = |i0, i1, blur_then_normal_chunk:&mut [u16]| unsafe {
+            let blur_then_normal = blur_then_normal_chunk.as_mut_ptr();
+            let start = image.as_ptr();
+            let [image, end] = [i0,i1].map(|i| start.add(i as usize));
+            let mut blur_then_normal = blur_then_normal as *mut u16x32;
+            let [mut image, end] = [image, end].map(|p| p as *const u16x32);
+            let threshold = SIMD::splat(threshold);
+            while image < end {
+                {
+                    let low = blur_then_normal.read();
+                    let low = low.simd_max(threshold).cast::<u32>();
+                    let image = image.read().cast::<u32>();
+                    let normal = srl(sll(image, 16)/srl(max*low, 16), 3); // 32bit precision should be enough
+                    //>>3: rescale to prevent amplified bright high within dark low from clipping (FIXME: fixed rescale either quantize too much or clip)
+                    //assert!(normal < 0x10000);
+                    *blur_then_normal = normal.cast::<u16>();
+                }
+                blur_then_normal = blur_then_normal.add(1);
+                image = image.add(1);
             }
-            blur_then_normal = blur_then_normal.add(1);
-            image = image.add(1);
-        }}
+        };
+        let mut blur_then_normal = blur_then_normal.data.as_mut();
+        let range = 0..image.len();
+        const THREADS : usize = 4;
+        std::thread::scope(|s| std::array::from_fn::<_, THREADS, _>(|thread| {
+            let i0 = range.start + (range.end-range.start)/(32*THREADS)*(32*THREADS)*thread/THREADS;
+            let i1 = range.start + (range.end-range.start)/(32*THREADS)*(32*THREADS)*(thread+1)/THREADS;
+            assert_eq!((i1-i0)%32, 0, "{} {i0} {i1} {}", range.start, range.end);
+            let blur_then_normal_chunk = blur_then_normal.take_mut(..(i1-i0)).unwrap();
+            let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1, blur_then_normal_chunk)).unwrap();
+            thread
+        }).map(|thread| thread.join().unwrap() )); // FIXME: skipping unaligned tail
     });
     blur_then_normal
 }

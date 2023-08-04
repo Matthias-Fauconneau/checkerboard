@@ -1,4 +1,4 @@
-#![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit,generic_arg_infer,array_try_map,array_windows)]
+#![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit,generic_arg_infer,array_try_map,array_windows,slice_take)]
 #![allow(non_camel_case_types,non_snake_case,unused_imports)]
 use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}};
 
