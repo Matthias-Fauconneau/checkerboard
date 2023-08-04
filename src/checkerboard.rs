@@ -1,5 +1,7 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image, ui::time};
 use std::simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x32, u32x32};
+fn srl<const N: usize>(a: SIMD<u32, N>, count: u32) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count) }
+fn sll<const N: usize>(a: SIMD<u32, N>, count: u32) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a << SIMD::splat(count) }
 
 pub fn max(data: &[u16]) -> u16 {
     let std::ops::Range{start, end} = data.as_ptr_range();
@@ -50,7 +52,6 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
                 let mut sum = first*SIMD::splat(R as u32);
                 let mut front = column;
                 for _y in 0..R { sum += front.read().cast::<u32>(); front = front.byte_add(source_stride*U16); }
-                fn srl<const N: usize>(a: SIMD<u32, N>, count: u32) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count) }
                 for _y in 0..R {
                     sum += front.read().cast::<u32>();
                     front = front.byte_add(source_stride*U16);
@@ -111,18 +112,21 @@ pub fn normalize<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Image<
     let mut blur_then_normal = transpose_box_convolve::<R>(x.as_ref());
     assert_eq!(image.stride, blur_then_normal.stride);
     time("",||{
-        let max = max as u32;
+        let max = SIMD::splat(max as u32);
         let mut blur_then_normal = blur_then_normal.as_mut_ptr();
         let std::ops::Range{start: mut image, end} = image.as_ptr_range();
+        let mut blur_then_normal = blur_then_normal as *mut u16x32;
+        let [mut image, end] = [image, end].map(|p| p as *const u16x32);
+        let threshold = SIMD::splat(threshold);
         while image < end { unsafe {
             {
-                let low = *blur_then_normal;
-                let low = low.max(threshold);
-                let image = *image as u32;
-                let normal = ((image<<16)/((max*low as u32)>>16))>>3; // 32bit precision should be enough
+                let low = blur_then_normal.read();
+                let low = low.simd_max(threshold).cast::<u32>();
+                let image = image.read().cast::<u32>();
+                let normal = srl(sll(image, 16)/srl(max*low, 16), 3); // 32bit precision should be enough
                 //>>3: rescale to prevent amplified bright high within dark low from clipping (FIXME: fixed rescale either quantize too much or clip)
-                assert!(normal < 0x10000);
-                *blur_then_normal = normal as u16;
+                //assert!(normal < 0x10000);
+                *blur_then_normal = normal.cast::<u16>();
             }
             blur_then_normal = blur_then_normal.add(1);
             image = image.add(1);
