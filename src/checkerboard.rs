@@ -1,4 +1,29 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image, ui::time};
+use std::simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x32, u32x32};
+
+pub fn max(data: &[u16]) -> u16 {
+    let std::ops::Range{start, end} = data.as_ptr_range();
+    let [mut sample, end] = [start, end].map(|p| p as *const u16x32);
+    let mut max = SIMD::splat(0);
+    unsafe{while sample < end { max = max.simd_max(sample.read()); sample = sample.add(1); }};
+    max.reduce_max()
+    /*let ref task = |i0, i1| unsafe {
+        let mut max = SIMD::splat(0);
+        let [start, end] = [i0,i1].map(|i| data.as_ptr().add(i as usize));
+        let [mut sample, end] = [start, end].map(|p| p as *const u16x32);
+        while sample < end { max = max.simd_max(sample.read()); sample = sample.add(1); }
+        max
+    };
+    let range = 0..data.len();
+    const THREADS : usize = 2;
+    std::thread::scope(|s| std::array::from_fn::<_, THREADS, _>(|thread| {
+        let i0 = range.start + (range.end-range.start)/(32*THREADS)*(32*THREADS)*thread/THREADS;
+        let i1 = range.start + (range.end-range.start)/(32*THREADS)*(32*THREADS)*(thread+1)/THREADS;
+        assert_eq!((i1-i0)%32, 0, "{} {i0} {i1} {}", range.start, range.end);
+        let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1)).unwrap();
+        thread
+    }).map(|thread| thread.join().unwrap() )).iter().sum::<u16x32>().reduce_max() // FIXME: skipping unaligned tail*/
+}
 
 pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
     let mut transpose = Image::<Box<[u16]>>::uninitialized(source.size.yx());
@@ -10,15 +35,13 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
         let transpose_stride = transpose.stride as usize;
         assert!(transpose_stride == source.size.y as usize);
         
-        use std::simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, u16x32, u32x32};
         let ref task = |i0, i1, transpose_chunk:Image<&mut[u16]>| unsafe {
             let std::ops::Range{start, end} = source.data.as_ptr_range();
             assert_eq!(end, start.add((source.size.y-1)as usize*source_stride).add(source.size.x as usize));
-            let [start, end] = [start, end].map(|p| p as *const u16x32);
+            let [column, column_end] = [i0,i1].map(|i| start.add(i as usize));
+            let [mut column, column_end, end] = [column, column_end, end].map(|p| p as *const u16x32);
         
             const U16 : usize = std::mem::size_of::<u16>();
-            let mut column = start.byte_add(i0 as usize*U16);
-            let column_end = start.byte_add(i1 as usize*U16);
             let mut rows = SIMD::splat(transpose_chunk.data.as_mut_ptr()).wrapping_add(SIMD::from_array(std::array::from_fn(|y| y*transpose_stride)));
             let factor = SIMD::splat(factor);
             while column < column_end /*for _x in x0/32..x1/32*/ {
@@ -56,7 +79,6 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
                 rows = rows.wrapping_add(SIMD::splat((32-1)*transpose_stride)); // width==stride
             }
         };
-        let time = std::time::Instant::now();
         let range = 0..source.size.x;
         const THREADS : usize = 4;
         let mut transpose = transpose.as_mut();
@@ -68,18 +90,14 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
             let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1, transpose_chunk)).unwrap();
             thread
         }) { thread.join().unwrap(); });
-
-        println!("{:?}", time.elapsed());
     }
     transpose
 }
 
-pub fn transpose_box_convolve<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R>(source, (1<<(16-4)) / (R+1+R) as u32) }
+pub fn transpose_box_convolve<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { time!(transpose_box_convolve_scale::<R>(source, (1<<(16-4)) / (R+1+R) as u32)) }
 
 pub fn transpose_box_convolve_scale_minmax<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
-    let mut max = 0;
-    let std::ops::Range{start: mut sample, end} = source.data.as_ptr_range();
-    unsafe{while sample < end { max = u16::max(max, *sample); sample = sample.add(1); }}
+    let max = time!(max(source.data));
     time!(transpose_box_convolve_scale::<R>(source, (1<<(32-4)) / (max as u32*(R+1+R) as u32)))
 }
 
