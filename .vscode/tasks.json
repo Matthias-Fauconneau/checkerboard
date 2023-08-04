@@ -1,14 +1,3 @@
-{
-	"version": "2.0.0",
-	"tasks": [
-		{
-			"type": "cargo",
-			"command": "run",
-			"args": ["--release"],
-			"problemMatcher": [
-				"$rustc"
-			],
-			"label": "fast"
-		}
-	]
-}
+{"version": "2.0.0", "tasks": [
+{"type": "cargo","command": "run","args": ["--release"],"problemMatcher": ["$rustc"],"label": "fast"}
+]}

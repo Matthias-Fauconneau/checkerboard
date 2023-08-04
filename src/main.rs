@@ -46,7 +46,8 @@ impl ui::Widget for App {
         if debug=="quads" { let (_, scale, offset) = scale(target, hololens.as_ref()); for a in P_hololens { cross(target, scale, offset, a, 0xFF00FF); } return Ok(()) }*/
 
         let nir = Camera::next_or_saved_or_start(&mut self.nir, &mut self.last_frame[1], "nir",xy{x:2592,y:1944});
-        let nir = {let size = nir.size/32*32; nir.slice((nir.size-size)/2, size)};
+        let nir = {let size = nir.size/128*128; nir.slice((nir.size-size)/2, size)};
+        //let nir = {let x = nir.size.x/64*64; nir.slice(xy{x: (nir.size.x-x)/2, y: 0}, xy{x, y: nir.size.y})}; // Both dimensions need to be aligned because of transpose (FIXME: only align stride+height)
         let debug = if self.debug_which=="nir" {self.debug} else{""};
         if debug=="original" { scale(target, nir.as_ref()); return Ok(()) }
         let low = box_convolve::<4/*12*/>(nir.as_ref());
