@@ -25,10 +25,11 @@ pub fn max(data: &[u16]) -> u16 {
     }).map(|thread| thread.join().unwrap() )).iter().sum::<u16x32>().reduce_max() // FIXME: skipping unaligned tail*/
 }
 
+const fn headroom(R: usize) -> u32 { (R+1+R).next_power_of_two().ilog2() }
 pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
     let mut transpose = Image::<Box<[u16]>>::uninitialized(source.size.yx());
     {
-        assert!(R+1+R < (1<<4) && R+1+R > (1<<(4-1)));
+        assert!(R+1+R < (1<<headroom(R)) && R+1+R > (1<<(headroom(R)-1)), "{R} {}", headroom(R));
         assert!(source.size.x%32 == 0, "{}", source.size.x); // == transpose height
         let source_stride = source.stride as usize;
         assert!(transpose.stride == transpose.size.x);
@@ -49,11 +50,11 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
                 let mut sum = first*SIMD::splat(R as u32);
                 let mut front = column;
                 for _y in 0..R { sum += front.read().cast::<u32>(); front = front.byte_add(source_stride*U16); }
-                fn srl<const N: usize>(a: SIMD<u32, N>, count: u8) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count as u32) }
+                fn srl<const N: usize>(a: SIMD<u32, N>, count: u32) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count) }
                 for _y in 0..R {
                     sum += front.read().cast::<u32>();
                     front = front.byte_add(source_stride*U16);
-                    srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(rows);
+                    srl(sum * factor, 16-headroom(R)).cast::<u16>().scatter_ptr(rows);
                     sum -= first;
                     rows = rows.wrapping_add(SIMD::splat(1));
                 }
@@ -63,14 +64,14 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
                     last = front.read().cast::<u32>();
                     sum += last;
                     front = front.byte_add(source_stride*U16);
-                    srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(rows);
+                    srl(sum * factor, 16-headroom(R)).cast::<u16>().scatter_ptr(rows);
                     sum -= back.read().cast::<u32>();
                     back = back.byte_add(source_stride*U16);
                     rows = rows.wrapping_add(SIMD::splat(1));
                 }
                 for _y in 0..R { //while back < end { // for y in height-R..height
                     sum += last;
-                    srl(sum * factor, 16-4).cast::<u16>().scatter_ptr(rows);
+                    srl(sum * factor, 16-headroom(R)).cast::<u16>().scatter_ptr(rows);
                     sum -= back.read().cast::<u32>();
                     back = back.byte_add(source_stride*U16);
                     rows = rows.wrapping_add(SIMD::splat(1));
@@ -94,29 +95,29 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
     transpose
 }
 
-pub fn transpose_box_convolve<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { time!(transpose_box_convolve_scale::<R>(source, (1<<(16-4)) / (R+1+R) as u32)) }
+pub fn transpose_box_convolve<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R>(source, (1<<(16-headroom(R))) / (R+1+R) as u32) }
 
-pub fn transpose_box_convolve_scale_minmax<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> {
-    let max = time!(max(source.data));
-    time!(transpose_box_convolve_scale::<R>(source, (1<<(32-4)) / (max as u32*(R+1+R) as u32)))
+pub fn transpose_box_convolve_scale_max<const R: usize>(source: Image<&[u16]>, max: u16) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R>(source, (1<<(32-headroom(R))) / (max as u32*(R+1+R) as u32)) }
+
+pub fn box_convolve<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { 
+    let max = max(image.data);
+    let x = transpose_box_convolve_scale_max::<R>(image, max);
+    transpose_box_convolve::<R>(x.as_ref())
 }
 
-pub fn box_convolve<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve::<R>(transpose_box_convolve_scale_minmax::<R>(image).as_ref()) }
-//pub fn box_convolve<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve::<R>(image) }
-
-/*pub fn high_pass(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
-    let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
-    if !(min < max) { return None; }
-    let mut low_then_high = box_convolve(image.as_ref(), R);
+pub fn high_pass<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Option<Image<Box<[u16]>>> {
+    let max = max(image.data);
+    let x = transpose_box_convolve_scale_max::<R>(image.as_ref(), max);
+    let mut low_then_high = transpose_box_convolve::<R>(x.as_ref());
     low_then_high.as_mut().zip_map(&image, |&low, &p| {
-        let high = (p-min) as u32*0xFFFF/(max-min) as u32;
+        let high = p as u32*0xFFFF/max as u32;
         assert!(high <= 0xFFFF);
         let low = low.max(threshold);
         let div = ((high*0xFFFF/low as u32)>>3) as u16;
         div
     });
     Some(low_then_high)
-}*/
+}
 
 fn otsu(image: Image<&[u16]>) -> u16 {
     assert!(image.len() < 1<<24);

@@ -33,7 +33,7 @@ struct App {
     debug_which: &'static str,
     debug: &'static str,
 }
-impl App { fn new() -> Self { Self{#[cfg(feature="hololens")] hololens: None, nir: /*None*/Some(NIR::new()), #[cfg(feature="ir")] ir: None, last_frame: [None, None, None], debug_which: "nir", debug:"low"}}}
+impl App { fn new() -> Self { Self{#[cfg(feature="hololens")] hololens: None, nir: /*None*/Some(NIR::new()), #[cfg(feature="ir")] ir: None, last_frame: [None, None, None], debug_which: "nir", debug:"even"}}}
 impl ui::Widget for App {
     fn size(&mut self, _: size) -> size { xy{x:2592,y:1944} }
     fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
@@ -50,11 +50,11 @@ impl ui::Widget for App {
         //let nir = {let x = nir.size.x/64*64; nir.slice(xy{x: (nir.size.x-x)/2, y: 0}, xy{x, y: nir.size.y})}; // Both dimensions need to be aligned because of transpose (FIXME: only align stride+height)
         let debug = if self.debug_which=="nir" {self.debug} else{""};
         if debug=="original" { scale(target, nir.as_ref()); return Ok(()) }
-        let low = box_convolve::<4/*12*/>(nir.as_ref());
+        let low = box_convolve::<4>(nir.as_ref());
         if debug=="low" { scale(target, low.as_ref()); return Ok(()) }
-        /*let Some(high) = self::high_pass(low.as_ref(), 42/*127*/, 0x1000) else { scale(target, low.as_ref()); return Ok(()) };
+        let Some(high) = self::high_pass::<42>(low.as_ref(), 0x1000) else { scale(target, low.as_ref()); return Ok(()) };
         if debug=="even" { scale(target, high.as_ref()); return Ok(()) }        
-        let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 9, 64., debug, target)  else { return Ok(()) };*/
+        //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 9, 64., debug, target)  else { return Ok(()) };
 
         /*let ir = Camera::next_or_saved_or_start(&mut self.ir, &mut self.last_frame[2], "ir",xy{x:256,y:192});
         let debug = if self.debug_which=="ir" {self.debug} else{""};
