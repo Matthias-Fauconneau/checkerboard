@@ -1,10 +1,19 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image, ui::time};
-use std::simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x32, u32x32};
+use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x32, u32x16}}, core::arch::x86_64::*};
+unsafe fn noop_low(a: u16x32) -> __m256i { _mm512_extracti64x4_epi64(a.into(), 0) }
+unsafe fn cast_u32(a: u16x32) -> [u32x16; 2] { [_mm512_cvtepu16_epi32(noop_low(a)).into(), _mm512_cvtepu16_epi32(_mm512_extracti64x4_epi64(a.into(), 1)).into()] }
+fn mul(s: u32, v: [u32x16; 2]) -> [u32x16; 2] { [SIMD::splat(s)*v[0], SIMD::splat(s)*v[1]] }
+fn add(a: [u32x16; 2], b: [u32x16; 2]) -> [u32x16; 2] { [a[0]+b[0], a[1]+b[1]] }
+fn sub(a: [u32x16; 2], b: [u32x16; 2]) -> [u32x16; 2] { [a[0]-b[0], a[1]-b[1]] }
+unsafe fn scatter(slice: *mut u16, offsets: [u32x16; 2], src: [u32x16; 2]) { // Scatter 32bit words in 16bit cells. Only works for increasing offsets
+    _mm512_i32scatter_epi32(slice as *mut _, offsets[0].into(), src[0].into(), 2);
+    _mm512_i32scatter_epi32(slice as *mut _, offsets[1].into(), src[1].into(), 2);
+}
 fn srl<const N: usize>(a: SIMD<u32, N>, count: u32) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a >> SIMD::splat(count) }
 fn sll<const N: usize>(a: SIMD<u32, N>, count: u32) -> SIMD<u32,N> where std::simd::LaneCount<N>: std::simd::SupportedLaneCount { a << SIMD::splat(count) }
 
 pub fn max(data: &[u16]) -> u16 {
-    let std::ops::Range{start, end} = data.as_ptr_range();
+    let Range{start, end} = data.as_ptr_range();
     let [mut sample, end] = [start, end].map(|p| p as *const u16x32);
     let mut max = SIMD::splat(0);
     unsafe{while sample < end { max = max.simd_max(sample.read()); sample = sample.add(1); }};
@@ -18,7 +27,7 @@ pub fn max(data: &[u16]) -> u16 {
     };
     let range = 0..data.len();
     const THREADS : usize = 2;
-    std::thread::scope(|s| std::array::from_fn::<_, THREADS, _>(|thread| {
+    std::thread::scope(|s| from_fn::<_, THREADS, _>(|thread| {
         let i0 = range.start + (range.end-range.start)/(32*THREADS)*(32*THREADS)*thread/THREADS;
         let i1 = range.start + (range.end-range.start)/(32*THREADS)*(32*THREADS)*(thread+1)/THREADS;
         assert_eq!((i1-i0)%32, 0, "{} {i0} {i1} {}", range.start, range.end);
@@ -35,50 +44,51 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
         assert!(source.size.x%32 == 0, "{}", source.size.x); // == transpose height
         let source_stride = source.stride as usize;
         assert!(transpose.stride == transpose.size.x);
-        let transpose_stride = transpose.stride as usize;
-        assert!(transpose_stride == source.size.y as usize);
+        let transpose_stride = transpose.stride;
+        assert!(transpose_stride == source.size.y);
         
         let ref task = |i0, i1, transpose_chunk:Image<&mut[u16]>| unsafe {
-            let std::ops::Range{start, end} = source.data.as_ptr_range();
+            let Range{start, end} = source.data.as_ptr_range();
             assert_eq!(end, start.add((source.size.y-1)as usize*source_stride).add(source.size.x as usize));
             let [column, column_end] = [i0,i1].map(|i| start.add(i as usize));
             let [mut column, column_end, end] = [column, column_end, end].map(|p| p as *const u16x32);
         
             const U16 : usize = std::mem::size_of::<u16>();
-            let mut rows = SIMD::splat(transpose_chunk.data.as_mut_ptr()).wrapping_add(SIMD::from_array(std::array::from_fn(|y| y*transpose_stride)));
-            let factor = SIMD::splat(factor);
+            let transpose_chunk = transpose_chunk.data.as_mut_ptr();
+            let mut rows = from_fn(|i| u32x16::from_array(from_fn(|y| (i*16+y) as u32*transpose_stride)));
             while column < column_end /*for _x in x0/32..x1/32*/ {
-                let first = column.read().cast::<u32>();
-                let mut sum = first*SIMD::splat(R as u32);
+                let first = cast_u32(column.read());
+                let mut sum = mul(R as u32, first);
                 let mut front = column;
-                for _y in 0..R { sum += front.read().cast::<u32>(); front = front.byte_add(source_stride*U16); }
+                for _y in 0..R { sum = add(sum, cast_u32(front.read())); front = front.byte_add(source_stride*U16); }
+                fn srl(a: [u32x16; 2], count: u32) -> [u32x16; 2] { [a[0] >> SIMD::splat(count), a[1] >> SIMD::splat(count)] }
                 for _y in 0..R {
-                    sum += front.read().cast::<u32>();
+                    sum = add(sum, cast_u32(front.read()));
                     front = front.byte_add(source_stride*U16);
-                    srl(sum * factor, 16-headroom(R)).cast::<u16>().scatter_ptr(rows);
-                    sum -= first;
-                    rows = rows.wrapping_add(SIMD::splat(1));
+                    scatter(transpose_chunk, rows, srl(mul(factor, sum), 16-headroom(R))); // Scattering 32bit words to increasing offsets: high part only overwrites cells before assignment
+                    sum = sub(sum, first);
+                    rows = add(rows, [SIMD::splat(1); 2]);
                 }
                 let mut back = column;
                 let mut last = first;
                 while front < end { //for y in R..height-R
-                    last = front.read().cast::<u32>();
-                    sum += last;
+                    last = cast_u32(front.read());
+                    sum = add(sum, last);
                     front = front.byte_add(source_stride*U16);
-                    srl(sum * factor, 16-headroom(R)).cast::<u16>().scatter_ptr(rows);
-                    sum -= back.read().cast::<u32>();
+                    scatter(transpose_chunk, rows, srl(mul(factor, sum), 16-headroom(R))); // Scattering 32bit words to increasing offsets: high part only overwrites cells before assignment
+                    sum = sub(sum, cast_u32(back.read()));
                     back = back.byte_add(source_stride*U16);
-                    rows = rows.wrapping_add(SIMD::splat(1));
+                    rows = add(rows, [SIMD::splat(1); 2]);
                 }
                 for _y in 0..R { //while back < end { // for y in height-R..height
-                    sum += last;
-                    srl(sum * factor, 16-headroom(R)).cast::<u16>().scatter_ptr(rows);
-                    sum -= back.read().cast::<u32>();
+                    sum = add(sum, last);
+                    scatter(transpose_chunk, rows, srl(mul(factor, sum), 16-headroom(R))); // Scattering 32bit words to increasing offsets: high part only overwrites cells before assignment
+                    sum = sub(sum, cast_u32(back.read()));
                     back = back.byte_add(source_stride*U16);
-                    rows = rows.wrapping_add(SIMD::splat(1));
+                    rows = add(rows, [SIMD::splat(1); 2]);
                 }
                 column = column.byte_add(32*U16);
-                rows = rows.wrapping_add(SIMD::splat((32-1)*transpose_stride)); // width==stride
+                rows = add(rows, [SIMD::splat((32-1)*transpose_stride); 2]); // width==stride
             }
         };
         let range = 0..source.size.x;
@@ -111,29 +121,29 @@ pub fn normalize<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Image<
     let x = transpose_box_convolve_scale_max::<R>(image.as_ref(), max);
     let mut blur_then_normal = transpose_box_convolve::<R>(x.as_ref());
     assert_eq!(image.stride, blur_then_normal.stride);
-    time("",||{
-        let max = SIMD::splat(max as u32);
-        let ref task = |i0, i1, blur_then_normal_chunk:&mut [u16]| unsafe {
-            let blur_then_normal = blur_then_normal_chunk.as_mut_ptr();
-            let start = image.as_ptr();
-            let [image, end] = [i0,i1].map(|i| start.add(i as usize));
-            let mut blur_then_normal = blur_then_normal as *mut u16x32;
-            let [mut image, end] = [image, end].map(|p| p as *const u16x32);
-            let threshold = SIMD::splat(threshold);
-            while image < end {
-                {
-                    let low = blur_then_normal.read();
-                    let low = low.simd_max(threshold).cast::<u32>();
-                    let image = image.read().cast::<u32>();
-                    let normal = srl(sll(image, 16)/srl(max*low, 16), 3); // 32bit precision should be enough
-                    //>>3: rescale to prevent amplified bright high within dark low from clipping (FIXME: fixed rescale either quantize too much or clip)
-                    //assert!(normal < 0x10000);
-                    *blur_then_normal = normal.cast::<u16>();
-                }
-                blur_then_normal = blur_then_normal.add(1);
-                image = image.add(1);
+    let max = SIMD::splat(max as u32);
+    let ref task = |i0, i1, blur_then_normal_chunk:&mut [u16]| unsafe {
+        let blur_then_normal = blur_then_normal_chunk.as_mut_ptr();
+        let start = image.as_ptr();
+        let [image, end] = [i0,i1].map(|i| start.add(i as usize));
+        let mut blur_then_normal = blur_then_normal as *mut u16x32;
+        let [mut image, end] = [image, end].map(|p| p as *const u16x32);
+        let threshold = SIMD::splat(threshold);
+        while image < end {
+            {
+                let low = blur_then_normal.read();
+                let low = low.simd_max(threshold).cast::<u32>();
+                let image = image.read().cast::<u32>();
+                let normal = srl(sll(image, 16)/srl(max*low, 16), 3); // 32bit precision should be enough
+                //>>3: rescale to prevent amplified bright high within dark low from clipping (FIXME: fixed rescale either quantize too much or clip)
+                //assert!(normal < 0x10000);
+                *blur_then_normal = normal.cast::<u16>();
             }
-        };
+            blur_then_normal = blur_then_normal.add(1);
+            image = image.add(1);
+        }
+    };
+    {
         let mut blur_then_normal = blur_then_normal.data.as_mut();
         let range = 0..image.len();
         const THREADS : usize = 4;
@@ -145,14 +155,25 @@ pub fn normalize<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Image<
             let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1, blur_then_normal_chunk)).unwrap();
             thread
         }).map(|thread| thread.join().unwrap() )); // FIXME: skipping unaligned tail
-    });
+    }
     blur_then_normal
 }
 
 fn otsu(image: Image<&[u16]>) -> u16 {
     assert!(image.len() < 1<<24);
-    let mut histogram : [u32; 65536] = [0; 65536];
-    for &pixel in image.iter() { histogram[pixel as usize] += 1; }
+    let mut histogram : [u32; 0x10000] = [0; 0x10000];
+    {
+        let histogram = histogram.as_mut_ptr();
+        let Range{start: mut pixel, end} = image.as_ptr_range();
+        let [mut pixel, end] = [pixel, end].map(|p| p as *const u16x32);
+        while pixel < end { unsafe {
+            for p in cast_u32(pixel.read()) {
+                let counts = core::arch::x86_64::_mm512_i32gather_epi32(p.into(), histogram as *const _, 4);
+                _mm512_i32scatter_epi32(histogram as *mut _, p.into(), (u32x16::from(counts)+SIMD::splat(1)).into(), 4);
+            }
+            pixel = pixel.add(1);
+        }}
+    }
     type u40 = u64;
     let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
     let mut threshold : u16 = 0;
@@ -261,8 +282,8 @@ pub fn top_left_first(Q: [vec2; 4]) -> [vec2; 4] { let i0 = Q.iter().enumerate()
 pub fn long_edge_first(mut Q: [vec2; 4]) -> [vec2; 4] { if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); } Q }
 
 pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, min_side: f32, debug: &'static str) -> Result<[vec2; 4],Image<Box<[u16]>>> {
-    let threshold = otsu(high.as_ref());    
-    if debug=="binary" { return Err(binary16(high.as_ref(), threshold, false)); }
+    let threshold = time!(otsu(high.as_ref()));
+    if debug=="threshold" { return Err(binary16(high.as_ref(), threshold, false)); }
     let erode = erode(high.as_ref(), erode_steps, threshold);
     if debug=="erode" { return Err(Image::from_iter(erode.size, erode.iter().map(|&p| (p as u16)<<8))); }
     let ref contours = imageproc::contours::find_contours::<u16>(&imagers::GrayImage::from_vec(erode.size.x, erode.size.y, erode.data.into_vec()).unwrap());
@@ -376,14 +397,14 @@ pub fn cross(target: &mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, col
     };
     for dy in -64..64 { plot(0, dy); }
     for dx in -64..64 { plot(dx, 0); }
-}
+}*/
 
 pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usize, min_side: f32, debug: &'static str, target: &mut Image<&mut [u32]>) -> Option<[vec2; 4]> { 
     use super::image::scale;
     match checkerboard_quad(nir.as_ref(), black, erode_steps, min_side, debug) {
         Err(image) => { scale(target, image.as_ref()); None }
         Ok(points) => {
-            let points = match refine(nir.as_ref(), points, 0/*128*/, debug) {
+            /*let points = match refine(nir.as_ref(), points, 0/*128*/, debug) {
                 Err((center, row, column, grid, row_axis, column_axis, corner)) => {
                     let (_, scale, offset) = scale(target, corner.as_ref());
                     cross(target, scale, offset, center, 0xFFFFFF);
@@ -403,16 +424,16 @@ pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usi
                     return None;
                 }
                 Ok(points) => points
-            };
+            };*/
             if debug=="z" {
                 let (_, scale, offset) = scale(target, nir.as_ref());
-                for (i,&p) in points.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
+                //for (i,&p) in points.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
                 return None;
             }
             Some(points)
         }
     }
-}*/
+}
 
 pub fn fit_rectangle(points: &[uint2]) -> [vec2; 4] {
     let area = |[a,b,c,d]:[vec2; 4]| {let abc = vector::cross2(b-a,c-a); let cda = vector::cross2(d-c,a-c); (abc+cda)/2.};
