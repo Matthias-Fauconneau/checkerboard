@@ -1,7 +1,13 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image, ui::time};
-use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x16, u16x32, u32x16}}, core::arch::x86_64::*};
-unsafe fn noop_low(a: u16x32) -> __m256i { _mm512_extracti64x4_epi64(a.into(), 0) }
-unsafe fn cast_u32(a: u16x32) -> [u32x16; 2] { [_mm512_cvtepu16_epi32(noop_low(a)).into(), _mm512_cvtepu16_epi32(_mm512_extracti64x4_epi64(a.into(), 1)).into()] }
+use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x32, u32x16, u32x8, u64x8}}, core::arch::{x86_64::*}};
+//unsafe fn noop_low(a: u16x32) -> __m256i { _mm512_extracti64x4_epi64(a.into(), 0) }
+unsafe fn _mm512_noop_low(a: __m512i) ->__m256i { _mm512_extracti64x4_epi64(a, 0) }
+unsafe fn _mm512_high_to_low(a: __m512i) ->__m256i { _mm512_extracti64x4_epi64(a, 1) }
+//unsafe fn _mm512_high_to_low_32x16(a: u32x16) ->__m256i { _mm512_high_to_low(a.into()) }
+//unsafe fn _mm512_high_to_low_16x32(a: u32x16) ->__m256i { _mm512_high_to_low(a.into()) }
+unsafe fn noop_low(a: impl Into<__m512i>) ->__m256i { _mm512_noop_low(a.into()) }
+unsafe fn high_to_low(a: impl Into<__m512i>) ->__m256i { _mm512_high_to_low(a.into()) }
+unsafe fn cast_u32(a: u16x32) -> [u32x16; 2] { [_mm512_cvtepu16_epi32(noop_low(a)).into(), _mm512_cvtepu16_epi32(high_to_low(a)).into()] }
 fn mul(s: u32, v: [u32x16; 2]) -> [u32x16; 2] { [SIMD::splat(s)*v[0], SIMD::splat(s)*v[1]] }
 fn add(a: [u32x16; 2], b: [u32x16; 2]) -> [u32x16; 2] { [a[0]+b[0], a[1]+b[1]] }
 fn sub(a: [u32x16; 2], b: [u32x16; 2]) -> [u32x16; 2] { [a[0]-b[0], a[1]-b[1]] }
@@ -161,134 +167,42 @@ pub fn normalize<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Image<
 
 fn otsu(image: Image<&[u16]>) -> u16 {
     assert!(image.len() < 1<<24);
-    //for &pixel in image.iter() { histogram[pixel as usize] += 1; }
-    /*let histogram : [u32; 0x10000] =
-    if true {
-        let mut pixel = 0;
-        while pixel < image.len()/32 {
-            let read : [[_; 16]; 2] = from_fn(|i| from_fn(|k| image[pixel*32+i*16+k]));
-            for p in read {
-                let counts = p.map(|k| histogram[k as usize]);
-                for k in 0..16 { histogram[p[k] as usize] = counts[k]+1; }
-            }
-            pixel = pixel+1;
-        }
-    } else {
-        let mut histogram : [u32; 0x10000] = [0; 0x10000];
-        let histogram = histogram.as_mut_ptr();
-        let Range{start: mut pixel, end} = image.as_ptr_range();
-        if true {
-            let mut histogram : [u32; 0x10000] = [0; 0x10000];
-            while pixel < end { unsafe { *histogram.add((*pixel) as usize) += 1; pixel = pixel.add(1); } }
-        } else {
-            let [mut pixel, end] = [pixel, end].map(|p| p as *const u16x32);
-            while pixel < end { unsafe {
-                for p in cast_u32(pixel.read()) {
-                    let counts = core::arch::x86_64::_mm512_i32gather_epi32(p.into(), histogram as *const _, 4);
-                    _mm512_i32scatter_epi32(histogram as *mut _, p.into(), (u32x16::from(counts)+SIMD::splat(1)).into(), 4);
-                }
-                pixel = pixel.add(1);
-            }}
-        }
-    }*/
-    //let mut histogram : [[u32; 0x10000]; 16] = [[0; 0x10000]; 16];
-    //let histogram = histogram.map(|p| p.as_mut_ptr());
-    
-    /*let mut histogram : [u32; 0x10000] = [0; 0x10000];
-    for &pixel in image.iter() { histogram[pixel as usize] += 1; }*/
-
-    /*let mut histogram : [u16; 0x10000*16] = [0; 0x10000*16];
-    let histogram = histogram.as_mut_ptr();
-    let histograms = u32x16::from_array(from_fn(|k| k as u32*0x10000));
-    let Range{start: pixel, end} = image.as_ptr_range();
-    let [mut pixel, end] = [pixel, end].map(|p| p as *const u16x32);
-    while pixel < end { unsafe {
-        for values in cast_u32(pixel.read()) {
-            let ptrs = (histograms+values).into();
-            let counts = core::arch::x86_64::_mm512_i32gather_epi32(ptrs, histogram as *const _, 2);
-            _mm512_i32scatter_epi32(histogram as *mut _, ptrs.into(), (u32x16::from(counts)+SIMD::splat(1)).into(), 2); // Scatter-add in 16bit cells (high parts are written back unmodified)
-        }
-        pixel = pixel.add(1);
-    }}
-    let histograms = histograms.as_array().map(|offset| unsafe{histogram.add(offset as usize)} as *const u16x32);
-    #[allow(invalid_value)] let mut histogram : [u32; 0x10000] = unsafe{std::mem::MaybeUninit::uninit().assume_init()};
-    {
-        let histogram = histogram.as_mut_ptr() as *mut u32x16;
-        for i in 0..0x10000/32 { unsafe{
-            let sum = histograms.iter().map(|offset| cast_u32(offset.add(i).read())).reduce(|a,b| [a[0]+b[0], a[1]+b[1]]).unwrap();
-            *histogram.add(i*2+0) = sum[0];
-            *histogram.add(i*2+1) = sum[1];
-        }}
-    }*/
-
-    /*let mut histogram : [u32; 0x10000] = [0; 0x10000];
-    {
-        let histogram = histogram.as_mut_ptr();
-        let Range{start: mut pixel, end} = image.as_ptr_range();
-        while pixel < end { unsafe{
-            *histogram.add(*pixel as usize) += 1;
-            pixel = pixel.add(1);
-        }}
-    }*/
-
-    /*let mut histogram : [u32; 0x10000] = [0; 0x10000];
+    let mut histogram : [u32; 0x10000] = [0; 0x10000];
     let mut pixel = 0;
     while pixel < image.len() {
         let read = image[pixel];
         histogram[read as usize] += 1;
         pixel = pixel+1;
+    }
+    
+    type u40 = u64;
+    //let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
+    /*let mut sum : u40 = 0;
+    let mut i = 0;
+    while i < histogram.len() {
+        sum += i/*16*/ as u40 * histogram[i]/*24*/ as u40;
+        i += 1;
     }*/
 
-    let ref task = |i0, i1| {
-        let mut histogram : [u32; 0x10000] = [0; 0x10000];
-        let mut pixel = i0;
-        while pixel < i1 {
-            let read = image[pixel];
-            histogram[read as usize] += 1;
-            pixel = pixel+1;
-        }
-        histogram
-    };
-    let range = 0..image.len();
-    const THREADS : usize = 1;
-    let histograms = std::thread::scope(|s| from_fn::<_, THREADS, _>(|thread| {
-        let i0 = range.start + (range.end-range.start)/THREADS*THREADS*thread/THREADS;
-        let i1 = range.start + (range.end-range.start)/THREADS*THREADS*(thread+1)/THREADS;
-        let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1)).unwrap();
-        thread
-    }).map(|thread| thread.join().unwrap() ));
-
-    #[allow(invalid_value)] let mut histogram : [u32; 0x10000] = unsafe{std::mem::MaybeUninit::uninit().assume_init()};
-    //for i in 0..0x10000 { histogram[i] = histograms.each_ref().map(|histogram| histogram[i]).iter().sum(); }
-    {
-        let histograms = histograms.each_ref().map(|histogram| histogram.as_ptr() as *const u32x16);
-        let histogram = histogram.as_mut_ptr() as *mut u32x16;
-        for i in 0..0x10000/16 { unsafe{ *histogram.add(i) = histograms[0].add(i).read(); } }
-        //for i in 0..0x10000/16 { unsafe{ *histogram.add(i) = histograms[0].add(i).read()+histograms[1].add(i).read(); } }
-        //for i in 0..0x10000/16 { unsafe{ *histogram.add(i) = histograms[0].add(i).read()+histograms[1].add(i).read()+histograms[2].add(i).read()+histograms[3].add(i).read(); } }
-        /*for i in 0..0x10000/16 {unsafe{ 
-            //let read = histograms.map(|histogram| histogram.add(i).read());
-            let read = [histograms[0].add(i).read(), histograms[1].add(i).read()];
-            *histogram.add(i) = read[0]+read[1]; 
-        }}*/
-        //for i in 0..0x10000/16 { unsafe{ *histogram.add(i) = histograms.map(|offset| offset.add(i).read()).iter().sum(); }}
-    }
-    /*{
-        let mut histograms = histograms.each_ref().map(|histogram| histogram.as_ptr() as *const u32x16);
+    let sum = {
+        let mut i  = u32x16::from_array(from_fn(|k| k as u32));
+        let mut sum = [u64x8::splat(0); 2];
         let Range{start: histogram, end} = histogram.as_mut_ptr_range();
         let [mut histogram, end] = [histogram, end].map(|p| p as *mut u32x16);
-        while histogram < end { unsafe {
-            // *histogram = histograms.map(|offset| offset.read()).iter().sum();
-            *histogram = histograms[0].read()+histograms[1].read();
+        while histogram < end { unsafe{
+            unsafe fn mul(a: u32x16, b: u32x16) -> [u64x8; 2] { [
+                u64x8::from(_mm512_mul_epu32(_mm512_cvtepu32_epi64(noop_low(a)), _mm512_cvtepu32_epi64(noop_low(b)))),
+                u64x8::from(_mm512_mul_epu32(_mm512_cvtepu32_epi64(high_to_low(a)), _mm512_cvtepu32_epi64(high_to_low(b))))
+            ]}
+            let mul = mul(i, histogram.read());
+            sum[0] += mul[0];
+            sum[1] += mul[1];
             histogram = histogram.add(1);
-            //histograms = histograms.map(|histogram| histogram.add(1));
-            histograms[0] = histograms[0].add(1); histograms[1] = histograms[1].add(1);
-        } }
-    }*/
-    //let _ = histograms;
+            i += SIMD::splat(16);
+        }}
+        (sum[0]+sum[1]).reduce_sum()
+    };
 
-    type u40 = u64;
-    let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
     let mut threshold : u16 = 0;
     let mut maximum_variance = 0;
     type u24 = u32;
