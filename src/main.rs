@@ -33,7 +33,7 @@ struct App {
     debug_which: &'static str,
     debug: &'static str,
 }
-impl App { fn new() -> Self { Self{#[cfg(feature="hololens")] hololens: None, nir: /*None*/Some(NIR::new()), #[cfg(feature="ir")] ir: None, last_frame: [None, None, None], debug_which: "visible", debug:"blur"}}}
+impl App { fn new() -> Self { Self{#[cfg(feature="hololens")] hololens: None, nir: /*None*/Some(NIR::new()), #[cfg(feature="ir")] ir: None, last_frame: [None, None, None], debug_which: "visible", debug:"threshold"}}}
 impl ui::Widget for App {
     fn size(&mut self, _: size) -> size { xy{x:2592,y:1944} }
     fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
