@@ -12,7 +12,7 @@ bytemuck='*'
 num={git='https://github.com/Matthias-Fauconneau/num'}
 vector={git='https://github.com/Matthias-Fauconneau/vector',features=['unstable']}#norm
 nalgebra={version='*', optional=true, default-features=false, features=['std']}
-image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit','slice_take']}
+image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit','slice_take','lazy_cell']}
 cameleon={version='*', features=['libusb'], optional=true}
 ui={git='https://github.com/Matthias-Fauconneau/ui',default-features=false,features=['softbuffer','generators']}
 imageproc='*'

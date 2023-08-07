@@ -32,8 +32,10 @@ struct App {
     last_frame: [Option<Image<Box<[u16]>>>; 3],
     debug_which: &'static str,
     debug: &'static str,
+    last: Option<[vec2; 4]>,
+    calibration: Option<[vec2; 4]>,
 }
-impl App { fn new() -> Self { Self{#[cfg(feature="hololens")] hololens: None, nir: /*None*/Some(NIR::new()), #[cfg(feature="ir")] ir: None, last_frame: [None, None, None], debug_which: "visible", debug:"threshold"}}}
+impl App { fn new() -> Self { Self{#[cfg(feature="hololens")] hololens: None, nir: /*None*/Some(NIR::new()), #[cfg(feature="ir")] ir: None, last_frame: [None, None, None], debug_which: "visible", debug:"", last: None, calibration: None}}}
 impl ui::Widget for App {
     fn size(&mut self, _: size) -> size { xy{x:2592,y:1944} }
     fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
@@ -50,11 +52,19 @@ impl ui::Widget for App {
         //let nir = {let x = nir.size.x/64*64; nir.slice(xy{x: (nir.size.x-x)/2, y: 0}, xy{x, y: nir.size.y})}; // Both dimensions need to be aligned because of transpose (FIXME: only align stride+height)
         let debug = if self.debug_which=="visible" {self.debug} else{""};
         if debug=="original" { scale(target, nir.as_ref()); return Ok(()) }
-        let low = time!(blur::<4>(nir.as_ref()));
+        let low = blur::<4>(nir.as_ref()); // 9ms
         if debug=="blur" { scale(target, low.as_ref()); return Ok(()) }
-        let high = self::normalize::<42>(low.as_ref(), 0x1000);
-        if debug=="normalize" { scale(target, high.as_ref()); return Ok(()) }        
-        let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 9, 64., debug, target)  else { return Ok(()) };
+        /*let high = self::normalize::<42>(low.as_ref(), 0x1000);
+        if debug=="normalize" { scale(target, high.as_ref()); return Ok(()) }*/
+        let high = low.as_ref();
+        //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 0/*Blur is enough*//*9*/, /*min_side: */64., debug, target)  else { return Ok(()) };*/
+        //let high = nir.as_ref();
+        let points = match checkerboard_direct_intersections(high.as_ref(), /*max_distance:*/64, debug) { Ok(points) => points, Err(image) => {scale(target, image.as_ref()); return Ok(()) }};
+        if debug=="points" { let (_, scale, offset) = scale(target, high.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); } return Ok(()) }
+        let P_nir = long_edge_first(top_left_first(simplify(convex_hull(&points.into_iter().map(vec2::from).collect::<Box<_>>())).try_into().unwrap()));
+        self.last = Some(P_nir);
+        if debug=="quads" { let (_, scale, offset) = scale(target, nir.as_ref()); for a in P_nir { cross(target, scale, offset, a, 0xFF00FF); } return Ok(()) }
+
 
         /*let ir = Camera::next_or_saved_or_start(&mut self.ir, &mut self.last_frame[2], "ir",xy{x:256,y:192});
         let debug = if self.debug_which=="ir" {self.debug} else{""};
@@ -80,9 +90,35 @@ impl ui::Widget for App {
         affine_blit(target, target_size, nir.as_ref(), map([P_hololens, P_nir]), hololens.size, 2);
         affine_blit(target, target_size, ir.as_ref(), map([P_hololens, P_ir]), hololens.size, 1);*/
 
-        let P_display = [xy{x: 0., y: 0.}, xy{x: target.size.x as f32, y: 0.}, xy{x: target.size.x as f32, y: target.size.y as f32}, xy{x: 0., y: target.size.y as f32}];
-        let target_size = target.size;
-        //affine_blit(target, target_size, nir.as_ref(), map([P_display, P_nir]), target.size, 1);
+        let P_nir_identity = [xy{x: 0., y: 0.}, xy{x: nir.size.x as f32, y: 0.}, xy{x: nir.size.x as f32, y: nir.size.y as f32}, xy{x: 0., y: nir.size.y as f32}];
+        if let Some(calibration) = self.last {
+            let (_target_size, scale, offset) = scale(target, nir.as_ref());
+            let map = map([P_nir_identity, calibration]);
+            let P = P_nir.map(|p| apply(map, p));
+            for (i,&p) in P.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
+            let [p00,p10,p11,p01] = P;
+            for i in 0..5 { for j in 0..7 {
+                let color = if (i%2==1) ^ (j%2==1) { 0xFFFFFF } else { 0 };
+                let p = |di,dj| {
+                    let [i, j] = [i+di, j+dj];
+                    let [u, v] = [i as f32/5., j as f32 / 7.];
+                    let p0 = (1.-u)*p00+u*p01;
+                    let p1 = (1.-u)*p10+u*p11;
+                    let p = (1.-v)*p0+v*p1;
+                    vec2::from(offset)+scale*p
+                };
+                let P : [vec2; 4] = [p(0,0),p(0,1),p(1,1),p(1,0)];
+                let vector::MinMax{min, max} = vector::minmax(P).unwrap();
+                let [p00,p10,p11,p01] = P;
+                for y in min.y as u32..=max.y as u32 { for x in min.x as u32..=max.x as u32 {
+                    let p = vec2::from(xy{x,y});
+                    if [p00,p10,p11,p01,p00].array_windows().all(|&[a,b]| vector::cross2(p-a,b-a)<0.) { target[xy{x,y}] = color; }
+                }}
+            }}
+        } else {
+            let target_size = target.size;
+            affine_blit(target, target_size, nir.as_ref(), map([P_nir_identity, P_nir]), target.size, 1);
+        }
         Ok(())
     }
     fn event(&mut self, _: vector::size, context: &mut ui::EventContext, event: &ui::Event) -> ui::Result<bool> {
@@ -95,6 +131,9 @@ impl ui::Widget for App {
                     if self.nir.is_none() { self.nir = Some(NIR::new()); }
                     //if self.ir.is_none() { self.ir = Some(IR::new()); }
                 }
+            } else if key=='\n' {
+                self.calibration = self.last;
+                context.set_title(&format!("{}", self.calibration.is_some()));
             } else {
                 fn starts_with<'t>(words: &[&'t str], key: char) -> Option<&'t str> { words.into_iter().find(|word| key==word.chars().next().unwrap()).copied() }
                 if let Some(word) = starts_with(&[/*"hololens",*/"visible"/*,"ir"*/], key) { self.debug_which = word }

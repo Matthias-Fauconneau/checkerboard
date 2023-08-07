@@ -136,7 +136,8 @@ pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image
         if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
         let s = source[uint2::from(p)];
         let p = &mut target[xy{x, y}];
-        *p = {let mut p = <[_; _]>::from(bgr8::from(*p)); p[i] = ((s-min) as u32*0xFF/(max-min) as u32) as u8; bgr8::from(p)}.into();
+        //*p = {let mut p = <[_; _]>::from(bgr8::from(*p)); p[i] = ((s-min) as u32*0xFF/(max-min) as u32) as u8; bgr8::from(p)}.into();
+        *p = u32::from(bgr8::from(((s-min) as u32*0xFF/(max-min) as u32) as u8));
     }}
     (scale, offset)
 }

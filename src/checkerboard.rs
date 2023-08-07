@@ -1,5 +1,5 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image, ui::time};
-use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x32, u32x16, u32x8, u64x8}}, core::arch::{x86_64::*}};
+use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u8x32, u16x32, u32x16, u32x8, u64x8}}, core::arch::{x86_64::*}};
 //unsafe fn noop_low(a: u16x32) -> __m256i { _mm512_extracti64x4_epi64(a.into(), 0) }
 unsafe fn _mm512_noop_low(a: __m512i) ->__m256i { _mm512_extracti64x4_epi64(a, 0) }
 unsafe fn _mm512_high_to_low(a: __m512i) ->__m256i { _mm512_extracti64x4_epi64(a, 1) }
@@ -176,33 +176,8 @@ fn otsu(image: Image<&[u16]>) -> u16 {
     }
     
     type u40 = u64;
-    //let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
-    /*let mut sum : u40 = 0;
-    let mut i = 0;
-    while i < histogram.len() {
-        sum += i/*16*/ as u40 * histogram[i]/*24*/ as u40;
-        i += 1;
-    }*/
-
-    let sum = {
-        let mut i  = u32x16::from_array(from_fn(|k| k as u32));
-        let mut sum = [u64x8::splat(0); 2];
-        let Range{start: histogram, end} = histogram.as_mut_ptr_range();
-        let [mut histogram, end] = [histogram, end].map(|p| p as *mut u32x16);
-        while histogram < end { unsafe{
-            unsafe fn mul(a: u32x16, b: u32x16) -> [u64x8; 2] { [
-                u64x8::from(_mm512_mul_epu32(_mm512_cvtepu32_epi64(noop_low(a)), _mm512_cvtepu32_epi64(noop_low(b)))),
-                u64x8::from(_mm512_mul_epu32(_mm512_cvtepu32_epi64(high_to_low(a)), _mm512_cvtepu32_epi64(high_to_low(b))))
-            ]}
-            let mul = mul(i, histogram.read());
-            sum[0] += mul[0];
-            sum[1] += mul[1];
-            histogram = histogram.add(1);
-            i += SIMD::splat(16);
-        }}
-        (sum[0]+sum[1]).reduce_sum()
-    };
-
+    let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
+    
     let mut threshold : u16 = 0;
     let mut maximum_variance = 0;
     type u24 = u32;
@@ -226,13 +201,40 @@ fn binary16(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u
     false => if p>threshold { 0xFFFF } else { 0 },
     true => if p<threshold { 0xFFFF } else { 0 }
 }))}
-fn binary(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u8]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
+/*fn binary(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u8]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
     false => if p>threshold { 0xFF } else { 0 },
     true => if p<threshold { 0xFF } else { 0 }
-}))}
+}))}*/
+fn binary(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u8]>> { 
+    let mut target = Image::<Box<[u8]>>::uninitialized(image.size);
+    {
+        assert_eq!(image.stride, target.stride);
+        let len = image.len();
+        /*let image = image.as_ptr();
+        let target = target.as_mut_ptr();
+        for i in 0..len {unsafe{
+            *target.add(i) = if *image.add(i) > threshold { 0xFF } else { 0 };
+        }}*/
+        let Range{start: mut image, end} = image.as_ptr_range();
+        let mut target = target.as_mut_ptr();
+        while image < end {unsafe{
+            *target = if *image > threshold { 0xFF } else { 0 };
+            image = image.add(1);
+            target = target.add(1);
+        }}
+        /*let [mut image, end] = [image, end].map(|p| p as *const u16x32);
+        let mut target = target as *mut u8x32;
+        while image < end {unsafe{
+            *target = u8x32::from(_mm256_mask_blend_epi8(_mm512_cmpgt_epu16_mask((*image).into(), u16x32::splat(threshold).into()), u8x32::splat(0).into(), u8x32::splat(0xFF).into()));
+            image = image.add(1);
+            target = target.add(1);
+        }}*/
+    }
+    target
+}
 
-fn erode(high: Image<&[u16]>, erode_steps: usize, threshold: u16) -> Image<Box<[u8]>> {
-    let mut binary = self::binary(high.as_ref(), threshold, false);
+/*fn erode(high: Image<&[u16]>, erode_steps: usize, threshold: u16) -> Image<Box<[u8]>> {
+    let mut binary = self::binary(high.as_ref(), threshold/*, false*/);
     let mut erode = Image::zero(binary.size);
     for i in 0..erode_steps {
         for y in 1..erode.size.y-1 {
@@ -246,7 +248,7 @@ fn erode(high: Image<&[u16]>, erode_steps: usize, threshold: u16) -> Image<Box<[
         std::mem::swap(&mut binary, &mut erode);
     }
     binary
-}
+}*/
 
 fn quads(contours: &[imageproc::contours::Contour<u16>], min_area: f32) -> Box<[[vec2; 4]]> {
     let mut quads = Vec::new();
@@ -309,13 +311,15 @@ pub fn top_left_first(Q: [vec2; 4]) -> [vec2; 4] { let i0 = Q.iter().enumerate()
 pub fn long_edge_first(mut Q: [vec2; 4]) -> [vec2; 4] { if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); } Q }
 
 pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, min_side: f32, debug: &'static str) -> Result<[vec2; 4],Image<Box<[u16]>>> {
-    let threshold = time!(otsu(high.as_ref()));
+    let threshold = otsu(high.as_ref());
     if debug=="threshold" { return Err(binary16(high.as_ref(), threshold, false)); }
-    let erode = erode(high.as_ref(), erode_steps, threshold);
+    //let erode = time!(erode(high.as_ref(), erode_steps, threshold));
+    assert_eq!(erode_steps, 0); // Blur is enough
+    let erode = self::binary(high.as_ref(), threshold);
     if debug=="erode" { return Err(Image::from_iter(erode.size, erode.iter().map(|&p| (p as u16)<<8))); }
     let ref contours = imageproc::contours::find_contours::<u16>(&imagers::GrayImage::from_vec(erode.size.x, erode.size.y, erode.data.into_vec()).unwrap());
     if debug=="contour" { let mut target = Image::zero(erode.size); for contour in contours { for p in &contour.points { target[xy{x: p.x as u32, y: p.y as u32}] = 0xFFFF; }} return Err(target); }
-    let quads = quads(contours, sq(min_side));
+    let quads = time!(quads(contours, sq(min_side))); // 1s
     if debug=="quads" { let mut target = Image::zero(erode.size);
         for q in &*quads { for [&a,&b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() { for (p,_,_,_) in ui::line::generate_line(target.size, [a,b]) { target[p] = 0xFFFF; } } }
         return Err(target); 
@@ -327,9 +331,9 @@ pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, 
     Ok(long_edge_first(top_left_first(Q)))
 }
 
-/*fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
+fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
     let mut cross = Image::zero(high.size);
-    const R : u32 = 3;
+    const R : u32 = 32;  //3;
     for y in R..high.size.y-R {
         for x in R..high.size.x-R {
             let [p00,p10,p01,p11] = {let r=R as i32;[xy{x:-r,y:-r},xy{x:r,y:-r},xy{x:-r,y:r},xy{x:r,y:r}]}.map(|d|high[(xy{x,y}.signed()+d).unsigned()]);
@@ -340,7 +344,7 @@ pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, 
             }
         }
     }
-    low_pass(cross.as_ref(), 1)
+    blur::<32>(cross.as_ref())
 }
 
 pub fn checkerboard_direct_intersections(high: Image<&[u16]>, max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
@@ -348,7 +352,7 @@ pub fn checkerboard_direct_intersections(high: Image<&[u16]>, max_distance: u32,
     if debug=="response" { return Err(cross); }
     
     let threshold = otsu(cross.as_ref()); //foreground_mean
-    if debug=="binary" { return Err(Image::from_iter(cross.size, cross.iter().map(|&p| if p>threshold { p } else { 0 }))); }
+    if debug=="threshold" { return Err(Image::from_iter(cross.size, cross.iter().map(|&p| if p>threshold { p } else { 0 }))); }
 
     let mut points = Vec::new();
     const R : u32 = 12;
@@ -363,7 +367,7 @@ pub fn checkerboard_direct_intersections(high: Image<&[u16]>, max_distance: u32,
         }} true})() { points.push(xy{x,y}); }
     }}
     if points.len() < 4 { return Err(cross); }
-    let points : Vec<_> = points.iter().map(|&a| (a, {
+    /*let points : Vec<_> = points.iter().map(|&a| (a, {
         let mut p = points.iter().filter(|&b| a!=*b).copied().collect::<Box<_>>();
         assert!(p.len() >= 3);
         let closest = if p.len() > 3 { let (closest, _, _) = p.select_nth_unstable_by_key(3, |p| vector::sq(p-a)); &*closest } else { &p };
@@ -380,7 +384,8 @@ pub fn checkerboard_direct_intersections(high: Image<&[u16]>, max_distance: u32,
         }
         walk(&points, &mut connected, p);
         connected
-    }).max_by_key(|g| g.len()).unwrap())
+    }).max_by_key(|g| g.len()).unwrap())*/
+    Ok(points)
 }
 
 pub fn refine(high: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static str) -> Result<[vec2; 4],(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)> {
@@ -424,7 +429,7 @@ pub fn cross(target: &mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, col
     };
     for dy in -64..64 { plot(0, dy); }
     for dx in -64..64 { plot(dx, 0); }
-}*/
+}
 
 pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usize, min_side: f32, debug: &'static str, target: &mut Image<&mut [u32]>) -> Option<[vec2; 4]> { 
     use super::image::scale;
