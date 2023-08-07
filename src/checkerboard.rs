@@ -1,5 +1,5 @@
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image, ui::time};
-use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x32, u32x16}}, core::arch::x86_64::*};
+use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u16x16, u16x32, u32x16}}, core::arch::x86_64::*};
 unsafe fn noop_low(a: u16x32) -> __m256i { _mm512_extracti64x4_epi64(a.into(), 0) }
 unsafe fn cast_u32(a: u16x32) -> [u32x16; 2] { [_mm512_cvtepu16_epi32(noop_low(a)).into(), _mm512_cvtepu16_epi32(_mm512_extracti64x4_epi64(a.into(), 1)).into()] }
 fn mul(s: u32, v: [u32x16; 2]) -> [u32x16; 2] { [SIMD::splat(s)*v[0], SIMD::splat(s)*v[1]] }
@@ -197,24 +197,38 @@ fn otsu(image: Image<&[u16]>) -> u16 {
     /*let mut histogram : [u32; 0x10000] = [0; 0x10000];
     for &pixel in image.iter() { histogram[pixel as usize] += 1; }*/
 
-    let mut histogram : [u32; 0x10000*16] = [0; 0x10000*16];
+    let mut histogram : [u16; 0x10000*16] = [0; 0x10000*16];
     let histogram = histogram.as_mut_ptr();
+    /*fn scatter2(array: *mut u16, offsets: u16x16,  values: u16x16) {
+        let offsets = _mm512_cvtepu16_epi32(offsets.into());
+        let odd = _mm512_test_epi32_mask(offsets, _mm512_set1_epi32(1));
+        let was_odd = _mm512_i32gather_epi32(offsets, array as *const _, 2);
+        let data_even = _mm512_mask_blend_epi16(0x55555555, was_odd, values);
+        _mm512_mask_i32scatter_epi32(array as *mut _, ~odd, vindex, data_even, 2);
+        __m256i was_even = _mm256_i32gather_epi32(arr32, vindex, 2);
+        __m256i data_odd = _mm256_blend_epi16(was_even, a);
+        _mm256_mask_i32scatter_epi32(array, odd, vindex, data_odd, 2);
+    }*/
     let histograms = u32x16::from_array(from_fn(|k| k as u32*0x10000));
     let Range{start: pixel, end} = image.as_ptr_range();
     let [mut pixel, end] = [pixel, end].map(|p| p as *const u16x32);
     while pixel < end { unsafe {
         for values in cast_u32(pixel.read()) {
             let ptrs = (histograms+values).into();
-            let counts = core::arch::x86_64::_mm512_i32gather_epi32(ptrs, histogram as *const _, 4);
-            _mm512_i32scatter_epi32(histogram as *mut _, ptrs.into(), (u32x16::from(counts)+SIMD::splat(1)).into(), 4);
+            let counts = core::arch::x86_64::_mm512_i32gather_epi32(ptrs, histogram as *const _, 2);
+            _mm512_i32scatter_epi32(histogram as *mut _, ptrs.into(), (u32x16::from(counts)+SIMD::splat(1)).into(), 2); // Scatter-add in 16bit cells (high parts are written back unmodified)
         }
         pixel = pixel.add(1);
     }}
-    let histograms = histograms.as_array().map(|offset| unsafe{histogram.add(offset as usize)} as *const u32x16);
+    let histograms = histograms.as_array().map(|offset| unsafe{histogram.add(offset as usize)} as *const u16x32);
     #[allow(invalid_value)] let mut histogram : [u32; 0x10000] = unsafe{std::mem::MaybeUninit::uninit().assume_init()};
     {
         let histogram = histogram.as_mut_ptr() as *mut u32x16;
-        for i in 0..0x10000/16 { unsafe{*histogram.add(i) = histograms.iter().map(|offset| offset.add(i).read()).sum(); }}
+        for i in 0..0x10000/32 { unsafe{
+            let sum = histograms.iter().map(|offset| cast_u32(offset.add(i).read())).reduce(|a,b| [a[0]+b[0], a[1]+b[1]]).unwrap();
+            *histogram.add(i*2+0) = sum[0];
+            *histogram.add(i*2+1) = sum[1];
+        }}
     }
 
     type u40 = u64;
