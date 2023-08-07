@@ -197,18 +197,8 @@ fn otsu(image: Image<&[u16]>) -> u16 {
     /*let mut histogram : [u32; 0x10000] = [0; 0x10000];
     for &pixel in image.iter() { histogram[pixel as usize] += 1; }*/
 
-    let mut histogram : [u16; 0x10000*16] = [0; 0x10000*16];
+    /*let mut histogram : [u16; 0x10000*16] = [0; 0x10000*16];
     let histogram = histogram.as_mut_ptr();
-    /*fn scatter2(array: *mut u16, offsets: u16x16,  values: u16x16) {
-        let offsets = _mm512_cvtepu16_epi32(offsets.into());
-        let odd = _mm512_test_epi32_mask(offsets, _mm512_set1_epi32(1));
-        let was_odd = _mm512_i32gather_epi32(offsets, array as *const _, 2);
-        let data_even = _mm512_mask_blend_epi16(0x55555555, was_odd, values);
-        _mm512_mask_i32scatter_epi32(array as *mut _, ~odd, vindex, data_even, 2);
-        __m256i was_even = _mm256_i32gather_epi32(arr32, vindex, 2);
-        __m256i data_odd = _mm256_blend_epi16(was_even, a);
-        _mm256_mask_i32scatter_epi32(array, odd, vindex, data_odd, 2);
-    }*/
     let histograms = u32x16::from_array(from_fn(|k| k as u32*0x10000));
     let Range{start: pixel, end} = image.as_ptr_range();
     let [mut pixel, end] = [pixel, end].map(|p| p as *const u16x32);
@@ -229,7 +219,73 @@ fn otsu(image: Image<&[u16]>) -> u16 {
             *histogram.add(i*2+0) = sum[0];
             *histogram.add(i*2+1) = sum[1];
         }}
+    }*/
+
+    /*let mut histogram : [u32; 0x10000] = [0; 0x10000];
+    {
+        let histogram = histogram.as_mut_ptr();
+        let Range{start: mut pixel, end} = image.as_ptr_range();
+        while pixel < end { unsafe{
+            *histogram.add(*pixel as usize) += 1;
+            pixel = pixel.add(1);
+        }}
+    }*/
+
+    /*let mut histogram : [u32; 0x10000] = [0; 0x10000];
+    let mut pixel = 0;
+    while pixel < image.len() {
+        let read = image[pixel];
+        histogram[read as usize] += 1;
+        pixel = pixel+1;
+    }*/
+
+    let ref task = |i0, i1| {
+        let mut histogram : [u32; 0x10000] = [0; 0x10000];
+        let mut pixel = i0;
+        while pixel < i1 {
+            let read = image[pixel];
+            histogram[read as usize] += 1;
+            pixel = pixel+1;
+        }
+        histogram
+    };
+    let range = 0..image.len();
+    const THREADS : usize = 1;
+    let histograms = std::thread::scope(|s| from_fn::<_, THREADS, _>(|thread| {
+        let i0 = range.start + (range.end-range.start)/THREADS*THREADS*thread/THREADS;
+        let i1 = range.start + (range.end-range.start)/THREADS*THREADS*(thread+1)/THREADS;
+        let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1)).unwrap();
+        thread
+    }).map(|thread| thread.join().unwrap() ));
+
+    #[allow(invalid_value)] let mut histogram : [u32; 0x10000] = unsafe{std::mem::MaybeUninit::uninit().assume_init()};
+    //for i in 0..0x10000 { histogram[i] = histograms.each_ref().map(|histogram| histogram[i]).iter().sum(); }
+    {
+        let histograms = histograms.each_ref().map(|histogram| histogram.as_ptr() as *const u32x16);
+        let histogram = histogram.as_mut_ptr() as *mut u32x16;
+        for i in 0..0x10000/16 { unsafe{ *histogram.add(i) = histograms[0].add(i).read(); } }
+        //for i in 0..0x10000/16 { unsafe{ *histogram.add(i) = histograms[0].add(i).read()+histograms[1].add(i).read(); } }
+        //for i in 0..0x10000/16 { unsafe{ *histogram.add(i) = histograms[0].add(i).read()+histograms[1].add(i).read()+histograms[2].add(i).read()+histograms[3].add(i).read(); } }
+        /*for i in 0..0x10000/16 {unsafe{ 
+            //let read = histograms.map(|histogram| histogram.add(i).read());
+            let read = [histograms[0].add(i).read(), histograms[1].add(i).read()];
+            *histogram.add(i) = read[0]+read[1]; 
+        }}*/
+        //for i in 0..0x10000/16 { unsafe{ *histogram.add(i) = histograms.map(|offset| offset.add(i).read()).iter().sum(); }}
     }
+    /*{
+        let mut histograms = histograms.each_ref().map(|histogram| histogram.as_ptr() as *const u32x16);
+        let Range{start: histogram, end} = histogram.as_mut_ptr_range();
+        let [mut histogram, end] = [histogram, end].map(|p| p as *mut u32x16);
+        while histogram < end { unsafe {
+            // *histogram = histograms.map(|offset| offset.read()).iter().sum();
+            *histogram = histograms[0].read()+histograms[1].read();
+            histogram = histogram.add(1);
+            //histograms = histograms.map(|histogram| histogram.add(1));
+            histograms[0] = histograms[0].add(1); histograms[1] = histograms[1].add(1);
+        } }
+    }*/
+    //let _ = histograms;
 
     type u40 = u64;
     let sum : u40 = histogram.iter().enumerate().map(|(i,&v)| i/*16*/ as u40 * v/*24*/ as u40).sum();
