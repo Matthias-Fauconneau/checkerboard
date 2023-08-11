@@ -56,12 +56,11 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (uint
     if min < max { match scale {
         4 => {
             //let [min, max] = [*source.iter().min().unwrap() as u16, *source.iter().max().unwrap() as u16].map(|v| (v*factor as u16*factor as u16+14)/15);
-            let _3source_stride_u16 = 3*source.stride as usize*std::mem::size_of::<u16>();
+            let _3source_stride_u16 = (4*source.stride-source.size.x) as usize*std::mem::size_of::<u16>();
             assert_eq!(source.size.x as usize*std::mem::size_of::<u16>()+_3source_stride_u16, 4*source.stride as usize*std::mem::size_of::<u16>());
             unsafe {
                 use std::simd::{SimdUint, u8x4, u16x4, u32x4};
                 let mut rows4 : [_; 4] = std::array::from_fn(|i| source.as_ptr().add(i*source.stride as usize) as *const u16x4);
-                assert!(source.stride == source.size.x);
                 let mut target_row = target.as_ptr();
                 for _ in 0..target.size.y {
                     for x in 0..target.size.x {
@@ -75,13 +74,11 @@ pub fn downscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (uint
             }
         }
         2 => {
-            let source_stride_u16 = source.stride as usize*std::mem::size_of::<u16>();
-            assert_eq!(source.size.x, source.stride);
+            let source_stride_u16 = (2*source.stride-source.size.x) as usize*std::mem::size_of::<u16>();
             assert_eq!(source.size.x as usize*std::mem::size_of::<u16>()+source_stride_u16, 2*source.stride as usize*std::mem::size_of::<u16>());
             unsafe {
                 use std::simd::{SimdUint, u8x4, u16x2, u32x2};
                 let mut rows2 : [_; 2] = std::array::from_fn(|i| source.as_ptr().add(i*source.stride as usize) as *const u16x2);
-                assert_eq!(source.stride, source.size.x);
                 let mut target_row = target.as_ptr();
                 for _ in 0..target.size.y {
                     for x in 0..target.size.x {
@@ -124,7 +121,7 @@ pub fn scale(target: &mut Image<&mut[u32]>, image: Image<&[u16]>) -> (uint2, f32
 use image::bgr8;
 
 use crate::matrix::{mat3, apply};
-pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image<&[u16]>, A: mat3, transform_target_size: uint2, i: usize) -> (f32, uint2) {
+pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image<&[u16]>, A: mat3, transform_target_size: uint2, _i: usize) -> (f32, uint2) {
     assert!(fit_size <= target.size);
     let offset = (target.size-fit_size)/2;
     let scale = transform_target_size.x as f32/fit_size.x as f32;

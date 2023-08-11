@@ -103,7 +103,7 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
         std::thread::scope(|s| for thread in std::array::from_fn::<_, THREADS, _>(|thread| {
             let i0 = range.start + (range.end-range.start)*thread as u32/THREADS as u32;
             let i1 = range.start + (range.end-range.start)*(thread as u32+1)/THREADS as u32;
-            assert_eq!((i1-i0)%32, 0, "{} {i0} {i1} {}", range.start, range.end);
+            assert_eq!((i1-i0)%32, 0, "{} {i0} {i1} {} {}", range.start, range.end, source.size);
             let transpose_chunk = transpose.take_mut(i1-i0);
             let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1, transpose_chunk)).unwrap();
             thread
