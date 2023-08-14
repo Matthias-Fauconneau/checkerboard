@@ -129,8 +129,9 @@ impl ui::Widget for App {
                 }
             }*/
             let offset = xy{x: 0, y: 0};
-            let map = map([P_nir_identity, calibration]);
+            let map = map([calibration, P_nir_identity]);
             let P = P_nir.map(|p| apply(map, p));
+            //assert_eq!(calibration.map(|p| apply(map, p)), P_nir_identity);
             let scale = f32::from(scale);
             for (i,&p) in P.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
             let [p00,p10,p11,p01] = P;
