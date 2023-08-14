@@ -1,4 +1,5 @@
-use {vector::{xy, uint2, int2, vec2, minmax, MinMax}, image::Image};
+#![allow(dead_code)]
+use {vector::{xy, uint2, /*int2, vec2,*/ minmax, MinMax}, image::Image};
 
 pub fn upscale(target: &mut Image<&mut [u32]>, source: Image<&[u16]>) -> (uint2, u32, uint2) {
     let MinMax{min, max} = minmax(source.iter().copied()).unwrap();

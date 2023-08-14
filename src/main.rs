@@ -1,5 +1,5 @@
 #![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit,generic_arg_infer,array_try_map,array_windows,slice_take,stdsimd)]
-#![allow(non_camel_case_types,non_snake_case)]
+#![allow(non_camel_case_types,non_snake_case,unused_imports)]
 use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}, ui::time};
 
 pub trait Camera : Sized {
@@ -35,10 +35,25 @@ struct App {
     _bt40: Option<BT40>,
     _ir: Option<IR>,
 }
-impl App { fn new() -> Self { Self{nir: Some(NIR::new()), last_frame: [None, None, None], debug_which: "visible", debug:"", last: None, calibration: None, _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, _ir: None}}}
+impl App { fn new() -> Self { Self{
+    nir: Some(NIR::new()), 
+    last_frame: [None, None, None], 
+    debug_which: "visible", debug:"", 
+    last: None, 
+    calibration: if true { None } else { Some({
+        let nir_size = xy{x: 2048, y: 1152};
+        let size = xy{x: nir_size.y*7/5/2, y: nir_size.y/2};
+        let offset = (nir_size-size)/2;
+        let side_length = size.x/7;
+        [xy{x: side_length, y: side_length}, xy{x: size.x-side_length, y: side_length}, xy{x: size.x-side_length, y: size.y-side_length}, xy{x: side_length, y: size.y-side_length}].map(|p| vec2::from(offset+p))
+    })},
+    _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
+    _ir: None}
+}}
 impl ui::Widget for App {
     fn size(&mut self, _: size) -> size { xy{x:2592,y:1944} }
     fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
+        if target.size == (xy{x: 960, y: 540}) { return Ok(()); } // WORKAROUND: winit first request paint at wrong scale factor
         /*let hololens = Camera::next_or_saved_or_start(&mut self.hololens,&mut self.last_frame[0], "hololens",xy{x:1280,y:720});
         let debug = if self.debug_which=="hololens" {self.debug} else{""};
         if debug=="original" { scale(target, hololens.as_ref()); return Ok(()) }
@@ -62,10 +77,12 @@ impl ui::Widget for App {
         //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 0/*Blur is enough*//*9*/, /*min_side: */64., debug, target)  else { return Ok(()) };*/
         //let high = nir.as_ref();
         let points = match checkerboard_direct_intersections(high.as_ref(), /*max_distance:*/64, debug) { Ok(points) => points, Err(image) => {scale(target, image.as_ref()); return Ok(()) }};
-        if debug=="points" { let (_, scale, offset) = scale(target, high.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); } return Ok(()) }
-        let P_nir = long_edge_first(top_left_first(simplify(convex_hull(&points.into_iter().map(vec2::from).collect::<Box<_>>())).try_into().unwrap()));
+        if debug=="points" { let (_, scale, offset) = scale(target, high.as_ref()); for &a in &points { cross(target, scale, offset, a.into(), 0xFF0000); } return Ok(()) }
+        let P_nir = simplify(convex_hull(&points.iter().copied().map(vec2::from).collect::<Box<_>>())).try_into();
+        let P_nir = P_nir.map(|P_nir| long_edge_first(top_left_first(P_nir)));
+        let Ok(P_nir) = P_nir else { let (_, scale, offset) = scale(target, high.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00000); } return Ok(()); };
         self.last = Some(P_nir);
-        if debug=="quads" { let (_, scale, offset) = scale(target, nir.as_ref()); for a in P_nir { cross(target, scale, offset, a, 0xFF00FF); } return Ok(()) }
+        if debug=="quads" { let (_, scale, offset) = scale(target, nir.as_ref()); for a in P_nir { cross(target, scale, offset, a, 0xFF0000); } return Ok(()) }
 
         /*let ir = Camera::next_or_saved_or_start(&mut self.ir, &mut self.last_frame[2], "ir",xy{x:256,y:192});
         let debug = if self.debug_which=="ir" {self.debug} else{""};
@@ -90,27 +107,38 @@ impl ui::Widget for App {
         for (i,&p) in P_hololens.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
         affine_blit(target, target_size, nir.as_ref(), map([P_hololens, P_nir]), hololens.size, 2);
         affine_blit(target, target_size, ir.as_ref(), map([P_hololens, P_ir]), hololens.size, 1);*/
-
-        let P_nir_identity = [xy{x: 0., y: 0.}, xy{x: nir.size.x as f32, y: 0.}, xy{x: nir.size.x as f32, y: nir.size.y as f32}, xy{x: 0., y: nir.size.y as f32}];
+        let scale = num::Ratio{num: 15, div: 16}; // 2048->1920 x 1152->1080
+        assert_eq!(scale*nir.size, target.size);
+        let P_nir_identity = {
+            let size = xy{x: nir.size.y*7/5/2, y: nir.size.y/2};
+            let offset = (nir.size-size)/2;
+            {
+                //[xy{x: , y: 0.}, xy{x: nir.size.x as f32, y: 0.}, xy{x: nir.size.x as f32, y: nir.size.y as f32}, xy{x: 0., y: nir.size.y as f32}]
+                // Inner corners
+                let side_length = size.x/7;
+                [xy{x: side_length, y: side_length}, xy{x: size.x-side_length, y: side_length}, xy{x: size.x-side_length, y: size.y-side_length}, xy{x: side_length, y: size.y-side_length}]
+            }.map(|p| vec2::from(offset+p))
+        };
         if let Some(calibration) = self.calibration {
             //let (_target_size, scale, offset) = scale(target, nir.as_ref());
-            let vector::MinMax{min, max} = vector::minmax(nir.iter().copied()).unwrap(); // FIXME
+            /*let vector::MinMax{min, max} = vector::minmax(nir.iter().copied()).unwrap(); // FIXME
             for y in 0..target.size.y {
                 for x in 0..target.size.x {
+                    // TODO: warp
                     target[xy{x,y}] = u32::from(bgr8::from(((nir[xy{x: x*(nir.size.x-1)/(target.size.x-1),y: y*(nir.size.y-1)/(target.size.y-1)}]-min)*0xFF/(max-min)) as u8)); // nearest: 2048x1152 -> 1920x1080
                 }
-            }
-            let scale = f32::from(num::Ratio{num: 15, div: 16}); // 1920:2048, 1080:1152
+            }*/
             let offset = xy{x: 0, y: 0};
             let map = map([P_nir_identity, calibration]);
             let P = P_nir.map(|p| apply(map, p));
+            let scale = f32::from(scale);
             for (i,&p) in P.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
             let [p00,p10,p11,p01] = P;
-            for i in 0..5 { for j in 0..7 {
+            for i in 0..3 { for j in 0..5 {
                 let color = if (i%2==1) ^ (j%2==1) { 0xFFFFFF } else { 0 };
                 let p = |di,dj| {
                     let [i, j] = [i+di, j+dj];
-                    let [u, v] = [i as f32/5., j as f32 / 7.];
+                    let [u, v] = [i as f32/3., j as f32/5.];
                     let p0 = (1.-u)*p00+u*p01;
                     let p1 = (1.-u)*p10+u*p11;
                     let p = (1.-v)*p0+v*p1;
@@ -121,23 +149,27 @@ impl ui::Widget for App {
                 let [p00,p10,p11,p01] = P;
                 for y in min.y as u32..=max.y as u32 { for x in min.x as u32..=max.x as u32 {
                     let p = vec2::from(xy{x,y});
-                    if [p00,p10,p11,p01,p00].array_windows().all(|&[a,b]| vector::cross2(p-a,b-a)<0.) { target[xy{x,y}] = color; }
+                    if [p00,p10,p11,p01,p00].array_windows().all(|&[a,b]| vector::cross2(p-a,b-a)<0.) { if let Some(target) = target.get_mut(xy{x,y}) { *target = color; } }
                 }}
             }}
         } else {
-            let size = target.size;
-            let checkerboard = |x,y| {
-                let n = 15;
-                let [i, j] = [x,y as i32].map(|x| (x/(size.x/n) as i32)); // FIXME: signed x
-                if i>1 && i<11 && j>=0 && j<7 && (i%2==1) ^ (j%2==1) { 0xFFFFFF } else { 0 }
-            };
-            for y in 0..size.y {
-                for x in 0..size.x { // Full image horizontal shift (setdisplaydistance: -32,256)
-                    target[(y * size.x + x) as usize] = checkerboard(x as i32, y as i32);
+            {let (_, scale, offset) = image::scale(target, nir.as_ref()); for a in P_nir { cross(target, scale, offset, a, 0x00FF00); }} // DEBUG
+            {
+                let size = xy{x: target.size.y*7/5/2, y: target.size.y/2};
+                let mut target = target.slice_mut((target.size-size)/2, size);
+                let side_length = target.size.x/7;
+                for y in 0..size.y {
+                    for x in 0..size.x {
+                        let [j, i] = [x,y].map(|x| x/side_length);
+                        target[xy{x,y}] |= if (i%2==1) ^ (j%2==1) { 0x00FF00 } else { 0 };
+                    }
                 }
             }
-            /*let target_size = target.size;
-            affine_blit(target, target_size, nir.as_ref(), map([P_nir_identity, P_nir]), target.size, 1);*/
+            {
+                let offset = xy{x: 0, y: 0};
+                let scale = f32::from(scale);
+                for (i,&p) in P_nir_identity.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); } //DEBUG
+            }
         }
         Ok(())
     }

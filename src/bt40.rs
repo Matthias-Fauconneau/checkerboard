@@ -1,5 +1,5 @@
 #!/bin/sh
-#[allow(unused_attributes)] /*
+#![allow(dead_code)] /*
 modprobe usb-serial-simple
 echo 04b8 0d12 >/sys/bus/usb-serial/drivers/generic/new_id
 chmod a+rw /dev/ttyUSB0

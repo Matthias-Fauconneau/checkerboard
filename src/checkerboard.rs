@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image, ui::time};
 use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u8x32, u16x32, u32x16, u32x8, u64x8}}, core::arch::{x86_64::*}};
 //unsafe fn noop_low(a: u16x32) -> __m256i { _mm512_extracti64x4_epi64(a.into(), 0) }
@@ -209,7 +210,7 @@ fn binary(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u8]>> {
     let mut target = Image::<Box<[u8]>>::uninitialized(image.size);
     {
         assert_eq!(image.stride, target.stride);
-        let len = image.len();
+        //let len = image.len();
         /*let image = image.as_ptr();
         let target = target.as_mut_ptr();
         for i in 0..len {unsafe{
@@ -347,7 +348,7 @@ fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
     blur::<32>(cross.as_ref())
 }
 
-pub fn checkerboard_direct_intersections(high: Image<&[u16]>, max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
+pub fn checkerboard_direct_intersections(high: Image<&[u16]>, _max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
     let cross = self::cross_response(high);
     if debug=="response" { return Err(cross); }
     
@@ -458,7 +459,7 @@ pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usi
                 Ok(points) => points
             };*/
             if debug=="z" {
-                let (_, scale, offset) = scale(target, nir.as_ref());
+                /*let (_, scale, offset) =*/ scale(target, nir.as_ref());
                 //for (i,&p) in points.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
                 return None;
             }
