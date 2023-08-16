@@ -44,7 +44,7 @@ pub fn max(data: &[u16]) -> u16 {
 }
 
 const fn headroom(R: usize) -> u32 { (R+1+R).next_power_of_two().ilog2() }
-pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
+pub fn transpose_box_convolve_scale<const R: usize, const THREADS : usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
     let mut transpose = Image::<Box<[u16]>>::uninitialized(source.size.yx());
     {
         assert!(R+1+R < (1<<headroom(R)) && R+1+R > (1<<(headroom(R)-1)), "{R} {}", headroom(R));
@@ -99,12 +99,11 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
             }
         };
         let range = 0..source.size.x;
-        const THREADS : usize = 4;
         let mut transpose = transpose.as_mut();
         std::thread::scope(|s| for thread in std::array::from_fn::<_, THREADS, _>(|thread| {
             let i0 = range.start + (range.end-range.start)*thread as u32/THREADS as u32;
             let i1 = range.start + (range.end-range.start)*(thread as u32+1)/THREADS as u32;
-            assert_eq!((i1-i0)%32, 0, "{} {i0} {i1} {} {}", range.start, range.end, source.size);
+            assert_eq!((i1-i0)%32, 0, "{} {i0} {i1} {} {} {THREADS}", range.start, range.end, source.size);
             let transpose_chunk = transpose.take_mut(i1-i0);
             let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1, transpose_chunk)).unwrap();
             thread
@@ -113,20 +112,54 @@ pub fn transpose_box_convolve_scale<const R: usize>(source: Image<&[u16]>, facto
     transpose
 }
 
-pub fn transpose_box_convolve<const R: usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R>(source, (1<<(16-headroom(R))) / (R+1+R) as u32) }
-
-pub fn transpose_box_convolve_scale_max<const R: usize>(source: Image<&[u16]>, max: u16) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R>(source, (1<<(32-headroom(R))) / (max as u32*(R+1+R) as u32)) }
-
-pub fn blur<const R: usize>(image: Image<&[u16]>) -> Image<Box<[u16]>> { 
-    let max = max(image.data);
-    let x = transpose_box_convolve_scale_max::<R>(image, max);
-    transpose_box_convolve::<R>(x.as_ref())
+pub fn transpose_box_convolve_slow(source: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> {
+    let mut transpose = Image::uninitialized(source.size.yx());
+    // /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
+    let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
+    if !(min < max) { return transpose;}
+    for y in 0..source.size.y {
+        let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
+        for x in 0..R { sum += source[xy{x, y}] as u32; }
+        for x in 0..R {
+            sum += source[xy{x: x+R, y}] as u32;
+            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: 0, y}] as u32;
+        }
+        for x in R..source.size.x-R {
+            sum += source[xy{x: x+R, y}] as u32;
+            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
+            //transpose[xy{x: y, y: x}] = (sum / (R+1+R) as u32) as u16;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        }
+        for x in source.size.x-R..source.size.x {
+            sum += source[xy{x: source.size.x-1, y}] as u32;
+            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
+            //transpose[xy{x: y, y: x}] = (sum / (R+1+R) as u32) as u16;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        }
+    }
+    transpose
 }
 
-pub fn normalize<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u16]>> {
+pub fn transpose_box_convolve<const R: usize, const THREADS : usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R, THREADS>(source, (1<<(16-headroom(R))) / (R+1+R) as u32) }
+
+pub fn transpose_box_convolve_scale_max<const R: usize, const THREADS : usize>(source: Image<&[u16]>, max: u16) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R, THREADS>(source, (1<<(32-headroom(R))) / (max as u32*(R+1+R) as u32)) }
+
+pub fn blur<const R: usize, const THREADS : usize>(image: Image<&[u16]>) -> Option<Image<Box<[u16]>>> { 
     let max = max(image.data);
-    let x = transpose_box_convolve_scale_max::<R>(image.as_ref(), max);
-    let mut blur_then_normal = transpose_box_convolve::<R>(x.as_ref());
+    if max == 0 { return None; }
+    let x = transpose_box_convolve_scale_max::<R, THREADS>(image, max);
+    Some(transpose_box_convolve::<R, THREADS>(x.as_ref()))
+}
+
+pub fn normalize<const R: usize, const THREADS : usize>(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u16]>> {
+    let max = max(image.data);
+    /*let x = transpose_box_convolve_scale_max::<R, THREADS>(image.as_ref(), max);
+    let mut blur_then_normal = transpose_box_convolve::<R, THREADS>(x.as_ref());*/
+    let mut blur_then_normal = transpose_box_convolve_slow(transpose_box_convolve_slow(image.as_ref(), R as u32).as_ref(), R as u32);
     assert_eq!(image.stride, blur_then_normal.stride);
     let max = SIMD::splat(max as u32);
     let ref task = |i0, i1, blur_then_normal_chunk:&mut [u16]| unsafe {
@@ -164,6 +197,20 @@ pub fn normalize<const R: usize>(image: Image<&[u16]>, threshold: u16) -> Image<
         }).map(|thread| thread.join().unwrap() )); // FIXME: skipping unaligned tail
     }
     blur_then_normal
+}
+
+pub fn normalize_slow(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
+    let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
+    if !(min < max) { return None; }
+    let mut blur_then_normal = transpose_box_convolve_slow(transpose_box_convolve_slow(image.as_ref(), R as u32).as_ref(), R as u32);
+    blur_then_normal.as_mut().zip_map(&image, |&low, &p| {
+        let high = (p-min) as u32*0xFFFF/(max-min) as u32;
+        assert!(high <= 0xFFFF);
+        let low = low.max(threshold);
+        let div = ((high*0xFFFF/low as u32)>>3) as u16;
+        div
+    });
+    Some(blur_then_normal)
 }
 
 fn otsu(image: Image<&[u16]>) -> u16 {
@@ -332,7 +379,7 @@ pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, 
     Ok(long_edge_first(top_left_first(Q)))
 }
 
-fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
+fn cross_response<const THREADS: usize>(high: Image<&[u16]>) -> Option<Image<Box<[u16]>>> {
     let mut cross = Image::zero(high.size);
     const R : u32 = 32;  //3;
     for y in R..high.size.y-R {
@@ -345,11 +392,11 @@ fn cross_response(high: Image<&[u16]>) -> Image<Box<[u16]>> {
             }
         }
     }
-    blur::<32>(cross.as_ref())
+    blur::<32, THREADS>(cross.as_ref())
 }
 
-pub fn checkerboard_direct_intersections(high: Image<&[u16]>, _max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
-    let cross = self::cross_response(high);
+pub fn checkerboard_direct_intersections<const THREADS: usize>(high: Image<&[u16]>, _max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
+    let Some(cross) = self::cross_response::<THREADS>(high.as_ref()) else { return Err(high.clone()) };
     if debug=="response" { return Err(cross); }
     
     let threshold = otsu(cross.as_ref()); //foreground_mean
@@ -389,8 +436,8 @@ pub fn checkerboard_direct_intersections(high: Image<&[u16]>, _max_distance: u32
     Ok(points)
 }
 
-pub fn refine(high: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static str) -> Result<[vec2; 4],(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)> {
-    let cross = cross_response(high.as_ref());
+pub fn refine<const THREADS: usize>(high: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static str) -> Result<[vec2; 4],(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)> {
+    let cross = cross_response::<THREADS>(high.as_ref()).unwrap();
 
     for _ in 0..1 {
         let grid = {

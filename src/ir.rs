@@ -7,13 +7,19 @@ impl super::Camera for IR {
         use uvc::*;
         assert!(unsafe{uvc_init(&mut uvc as *mut _, null_mut())} >= 0);
         let mut devices : *mut *mut uvc_device_t = null_mut();
-        assert!(unsafe{uvc_find_devices(uvc, &mut devices as *mut _, 0/*xbda*/, 0/*x5840*/, std::ptr::null())} >= 0);
+        assert!(unsafe{uvc_find_devices(uvc, &mut devices as *mut _, 0/*x0bda*/, 0/*x5840*/, std::ptr::null())} >= 0);
         for device in std::iter::successors(Some(devices), |devices| Some(unsafe{devices.add(1)})) {
             let device = unsafe{*device};
             if device.is_null() { break; }
             let mut device_descriptor : *mut uvc_device_descriptor_t = null_mut();
             assert!(unsafe{uvc_get_device_descriptor(device, &mut device_descriptor as &mut _)} >= 0);
             assert!(!device_descriptor.is_null());
+            let device_descriptor = unsafe{*device_descriptor};
+            if device_descriptor.idProduct != 0x5840 { continue; }
+            /*println!("{:x} {:x} {:x}", device_descriptor.idVendor, device_descriptor.idProduct, device_descriptor.bcdUVC);
+            if !device_descriptor.serialNumber.is_null() { println!("{:?}", unsafe{std::ffi::CStr::from_ptr(device_descriptor.serialNumber)}); }
+            if !device_descriptor.manufacturer.is_null() { println!("{:?}", unsafe{std::ffi::CStr::from_ptr(device_descriptor.manufacturer)}); }
+            if !device_descriptor.product.is_null() { println!("{:?}", unsafe{std::ffi::CStr::from_ptr(device_descriptor.product)}); }*/
             let mut device_handle = null_mut();
             assert!(unsafe{uvc_open(device, &mut device_handle as *mut _)} >= 0);
             let mut control = unsafe{std::mem::zeroed()};

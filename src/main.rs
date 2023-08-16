@@ -5,11 +5,11 @@ use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}, ui::time};
 pub trait Camera : Sized {
     fn new() -> Self;
     fn next(&mut self) -> Image<Box<[u16]>>;
-    fn next_or_saved_or_start(camera: &mut Option<Self>, clone: &mut Option<Image<Box<[u16]>>>, name: &str, size: size) -> Image<Box<[u16]>> {
+    /*fn next_or_saved_or_start(camera: &mut Option<Self>, clone: &mut Option<Image<Box<[u16]>>>, name: &str, size: size) -> Image<Box<[u16]>> {
         if let Some(camera) = camera.as_mut() {let image = camera.next(); *clone = Some(image.clone()); image} 
         else if let Some(image) = raw(name,size) { image }
         else { *camera = Some(Self::new()); let image = camera.as_mut().unwrap().next(); *clone = Some(image.clone()); image}
-    }
+    }*/
 }
 pub struct Unimplemented;
 impl Camera for Unimplemented {
@@ -17,8 +17,8 @@ impl Camera for Unimplemented {
     fn next(&mut self) -> Image<Box<[u16]>> { unimplemented!() }
 }
 
-#[cfg(feature="nir")] mod nir; #[cfg(feature="nir")] use nir::NIR; #[cfg(not(feature="nir"))] type NIR = Unimplemented;
-#[cfg(feature="ir")] mod ir; #[cfg(feature="ir")] use ir::IR; #[cfg(not(feature="ir"))] #[allow(unused)] type IR = Unimplemented;
+mod nir; use nir::NIR;
+mod ir; use ir::IR; 
 
 mod checkerboard; use checkerboard::*;
 mod matrix; use matrix::*;
@@ -26,35 +26,53 @@ mod image; use image::*;
 mod bt40; use bt40::*;
 
 enum Mode { Place, Calibrate, Use, Replace }
-struct App {
-    nir: Option<NIR>,
-    mode: Mode,
-    last: Option<[vec2; 4]>,
+struct Calibrated<T> {
+    camera: T,
     calibration: [[vec2; 4]; 2],
-    _ir: Option<IR>,
-    _bt40: Option<BT40>,
-    debug_which: &'static str,
-    debug: &'static str,
-    last_frame: [Option<Image<Box<[u16]>>>; 3],
 }
-impl App { 
-    fn P_nir_identity() -> [vec2; 4] {
-        let nir_size = xy{x: 2048, y: 1152};
+impl<T:Camera> Calibrated<T> {
+    /*fn P_identity(size: size) -> [vec2; 4] {
         let size = xy{x: nir_size.y*7/5/2, y: nir_size.y/2};
         let offset = (nir_size-size)/2;
         let side_length = size.x/7;
         [xy{x: side_length, y: side_length}, xy{x: size.x-side_length, y: side_length}, xy{x: size.x-side_length, y: size.y-side_length}, xy{x: side_length, y: size.y-side_length}].map(|p| vec2::from(offset+p))
+    }*/
+    fn new(name: &str/*, size: size*/) -> Self { 
+        Self{
+            camera: T::new(), 
+            calibration: std::fs::read(name).map(|data| *bytemuck::from_bytes(&data)).unwrap_or(
+                [/*Self::P_identity(size)*/[xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}]; 2]
+            )
+        }
     }
+}
+struct App {
+    nir: Calibrated<NIR>,
+    mode: Mode,
+    last: Option<[vec2; 4]>,
+    ir: Calibrated<IR>,
+    _bt40: Option<BT40>,
+    which: &'static str,
+    debug: &'static str,
+    //last_frame: [Option<Image<Box<[u16]>>>; 3],
+}
+impl App { 
     fn new() -> Self { Self{
-        nir: Some(NIR::new()),
+        nir: Calibrated::<NIR>::new("nir"/*,xy{x: 2048, y: 1152}*/),
         mode: Mode::Place,
         last: None, 
-        calibration: std::fs::read("calibration").map(|data| *bytemuck::from_bytes(&data)).unwrap_or([Self::P_nir_identity(); 2]),
-        _ir: None,
+        ir: Calibrated::<IR>::new("ir"),
         _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
-        debug_which: "visible", debug:"", 
-        last_frame: [None, None, None], 
+        which: "ir", debug:"normalize", 
+        //last_frame: [None, None, None], 
     }}
+    fn calibration(&mut self) -> &mut [[vec2; 4]; 2] {
+        match self.which {
+            "nir" => &mut self.nir.calibration,
+            "ir" => &mut self.ir.calibration,
+            _ => unimplemented!(),
+        }
+    }
 }
 impl ui::Widget for App {
     fn size(&mut self, _: size) -> size { xy{x:2592,y:1944} }
@@ -69,7 +87,8 @@ impl ui::Widget for App {
         let P_hololens = long_edge_first(top_left_first(simplify(convex_hull(&points.into_iter().map(vec2::from).collect::<Box<_>>())).try_into().unwrap()));
         if debug=="quads" { let (_, scale, offset) = scale(target, hololens.as_ref()); for a in P_hololens { cross(target, scale, offset, a, 0xFF00FF); } return Ok(()) }*/
 
-        let full_nir = Camera::next_or_saved_or_start(&mut self.nir, &mut self.last_frame[1], "nir",xy{x:2592,y:1944});
+        /*if false {
+        let full_nir = Camera::next_or_saved_or_start(&mut self.nir.map(|nir| nir.camera), &mut self.last_frame[1], "nir",xy{x:2592,y:1944});
         //let nir = {let size = nir.size/128*128; nir.slice((nir.size-size)/2, size)}; // 2592x1944 => 2560x1920
         //let nir = {let size = xy{x: nir.size.x, y: nir.size.x/16*9}; nir.slice((nir.size-size)/2, size)};  // 16:9 => 2592x1458|2560x1440
         let nir = {let ref nir = full_nir; let size = xy{x: nir.size.x/128/16*16*128, y: nir.size.x/128/16*9*128}; nir.slice((nir.size-size)/2, size)};  // 16:9 => 2048x1152
@@ -131,7 +150,7 @@ impl ui::Widget for App {
         /*let high = self::normalize::<42>(low.as_ref(), 0x1000);
         if debug=="normalize" { scale(target, high.as_ref()); return Ok(()) }*/
         let high = low.as_ref();
-        //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 0/*Blur is enough*//*9*/, /*min_side: */64., debug, target)  else { return Ok(()) };*/
+        //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 0/*Blur is enough*/ /*9*/, /*min_side: */64., debug, target)  else { return Ok(()) };
         //let high = nir.as_ref();
         let points = match checkerboard_direct_intersections(high.as_ref(), /*max_distance:*/64, debug) { Ok(points) => points, Err(image) => {image::scale(target, image.as_ref()); return Ok(()) }};
         if debug=="points" { let (_, scale, offset) = image::scale(target, high.as_ref()); for &a in &points { cross(target, scale, offset, a.into(), 0xFF0000); } return Ok(()) }
@@ -144,16 +163,19 @@ impl ui::Widget for App {
             self.mode = Mode::Calibrate; 
         }
         if debug=="quads" { let (_, scale, offset) = image::scale(target, nir.as_ref()); for a in P_nir { cross(target, scale, offset, a, 0xFF0000); } return Ok(()) }
+        }*/
 
-        /*let ir = Camera::next_or_saved_or_start(&mut self.ir, &mut self.last_frame[2], "ir",xy{x:256,y:192});
-        let debug = if self.debug_which=="ir" {self.debug} else{""};
+        let ir = self.ir.camera.next();
+        let debug = if self.which=="ir" {self.debug} else{""};
         if debug=="original" { scale(target, ir.as_ref()); return Ok(()); }
-        let Some(high) = self::high_pass(ir.as_ref(), 16, 0x2000) else { scale(target, ir.as_ref()); return Ok(()); };
-        let points = match checkerboard_direct_intersections(high.as_ref(), 32, debug) { Ok(points) => points, Err(image) => {scale(target, image.as_ref()); return Ok(()) }};
+        let Some(high) = checkerboard::normalize_slow/*::<16, 2>*/(ir.as_ref(), 16, 0x2000) else {scale(target, ir.as_ref()); return Ok(()) };
+        if debug=="normalize" { scale(target, high.as_ref()); return Ok(()) };//ir.as_ref();
+        let points = match checkerboard_direct_intersections::<2>(high.as_ref(), 32, debug) { Ok(points) => points, Err(image) => {scale(target, image.as_ref()); return Ok(()) }};
         if debug=="points" { let (_, scale, offset) = scale(target, ir.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); } return Ok(())}
-        let P_ir = fit_rectangle(&points);
-        if debug=="quads" { let (_, scale, offset) = scale(target, ir.as_ref()); for a in P_ir { cross(target, scale, offset, a, 0xFF00FF); } return Ok(())}*/
-        
+        let P = fit_rectangle(&points);
+        if debug=="quads" { let (_, scale, offset) = scale(target, ir.as_ref()); for a in P { cross(target, scale, offset, a, 0xFF00FF); } return Ok(())}
+        let scale = num::Ratio{num: 45, div: 8}; // 192->1080
+
         /*let (target_size, scale, offset) = scale(target, hololens.as_ref());
         for (i,&p) in P_hololens.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
         affine_blit(target, target_size, nir.as_ref(), map([P_hololens, P_nir]), hololens.size, 2);
@@ -227,11 +249,11 @@ impl ui::Widget for App {
         /*let A = map([P_nir, Self::P_nir_identity()]);
         let P = P_nir.map(|p| apply(A, p));*/
         let P = match self.mode {
-            Mode::Place => P_nir,
+            Mode::Place => P,
             Mode::Calibrate => {
                 let scale = f32::from(scale);
-                for (i,&p) in P_nir.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
-                self.calibration[0]
+                for (i,&p) in P.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
+                self.calibration()[0]
             },
             _ => unreachable!(),
         };
@@ -264,16 +286,16 @@ impl ui::Widget for App {
             if ['⎙','\u{F70C}'].contains(&key) {
                 println!("⎙");
                 write("checkerboard.png", {let mut target = Image::uninitialized(xy{x: 2592, y:1944}); let size = target.size; self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap(); target}.as_ref());
-                if self.last_frame.iter_mut().zip([/*"hololens",*/"nir"/*,"ir"*/]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| write_raw(name, image.as_ref())).count() == 0 {
+                /*if self.last_frame.iter_mut().zip([/*"hololens",*/"nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| write_raw(name, image.as_ref())).count() == 0 {
                     //if self.hololens.is_none() { self.hololens = Some(Hololens::new()); }
-                    if self.nir.is_none() { self.nir = Some(NIR::new()); }
-                    //if self.ir.is_none() { self.ir = Some(IR::new()); }
-                }
+                    //if self.nir.is_none() { self.nir = Some(Calibrated::<NIR>::new("nir")); }
+                    //if self.ir.is_none() { self.ir = Some(Calibrated::<IR>::new("ir")); }
+                }*/
             } else if key=='\n' {
                 //if self.calibration.is_none() {
-                    self.calibration[1] = self.last.unwrap();
+                    self.calibration()[1] = self.last.unwrap();
                     //context.set_title(&format!("{}", self.calibration.is_some()));
-                    std::fs::write("calibration", bytemuck::bytes_of(&self.calibration)).unwrap();
+                    std::fs::write(self.which, bytemuck::bytes_of(&*self.calibration())).unwrap();
                     self.mode = Mode::Use; 
                 /*} else {
                     self.calibration = None;
@@ -284,13 +306,13 @@ impl ui::Widget for App {
                 self.mode = Mode::Place; 
             } else {
                 fn starts_with<'t>(words: &[&'t str], key: char) -> Option<&'t str> { words.into_iter().find(|word| key==word.chars().next().unwrap()).copied() }
-                if let Some(word) = starts_with(&[/*"hololens",*/"visible"/*,"ir"*/], key) { self.debug_which = word }
+                if let Some(word) = starts_with(&[/*"hololens",*/"visible","ir"], key) { self.which = word }
                 else if let Some(word) = starts_with(&["blur","contour","response","erode","normalize","low","max","original","z","points","quads","threshold"], key) { self.debug = word; }
-                else { self.debug_which=""; self.debug="";  }
-                context.set_title(&format!("{} {}", self.debug_which, self.debug));
+                else { self.which=""; self.debug="";  }
+                //context.set_title(&format!("{} {}", self.which, self.debug));
             }
             Ok(true)
-        } else { Ok(/*self.hololens.is_some() ||*/ self.nir.is_some() /*||self.ir.is_some()*/) }
+        } else { Ok(/*self.hololens.is_some() ||*/ /*self.nir.is_some()*/ /*||self.ir.is_some()*/true) }
     }
 }
 #[cfg(debug_assertions)] const TITLE: &'static str = "#[cfg(debug_assertions)]";

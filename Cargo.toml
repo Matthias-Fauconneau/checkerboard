@@ -5,7 +5,7 @@ nir=['dep:cameleon']
 ir=['dep:uvc']
 png=['imagers/png']
 hololens=['dep:ffmpeg']
-default=['dep:nalgebra','nir'] #'ir','png','hololens']
+default=['dep:nalgebra','nir','ir']#,'png','hololens']
 
 [dependencies]
 bytemuck='*'
@@ -15,7 +15,7 @@ nalgebra={version='*', optional=true, default-features=false, features=['std']}
 image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit','slice_take','lazy_cell']}
 cameleon={version='*', features=['libusb'], optional=true}
 serialport="*"
-ui={git='https://github.com/Matthias-Fauconneau/ui',default-features=false,features=['softbuffer','generators']}
+ui={git='https://github.com/Matthias-Fauconneau/ui',features=['generators']} #'softbuffer'#default-features=false,
 imageproc='*'
 itertools='*'
 uvc={package='uvc-sys', git='https://github.com/l1npengtul/libuvc-rs', optional=true}
