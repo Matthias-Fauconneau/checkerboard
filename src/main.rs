@@ -25,33 +25,37 @@ mod matrix; use matrix::*;
 mod image; use image::*;
 mod bt40; use bt40::*;
 
+enum Mode { Place, Calibrate, Use, Replace }
 struct App {
     nir: Option<NIR>,
-    last_frame: [Option<Image<Box<[u16]>>>; 3],
+    mode: Mode,
+    last: Option<[vec2; 4]>,
+    calibration: [[vec2; 4]; 2],
+    _ir: Option<IR>,
+    _bt40: Option<BT40>,
     debug_which: &'static str,
     debug: &'static str,
-    last: Option<[vec2; 4]>,
-    calibration: Option<[vec2; 4]>,
-    _bt40: Option<BT40>,
-    _ir: Option<IR>,
-    align: bool,
+    last_frame: [Option<Image<Box<[u16]>>>; 3],
 }
-impl App { fn new() -> Self { Self{
-    nir: Some(NIR::new()), 
-    last_frame: [None, None, None], 
-    debug_which: "visible", debug:"", 
-    last: None, 
-    calibration: if true { std::fs::read("calibration").map(|data| *bytemuck::from_bytes(&data)).ok() } else { Some({
+impl App { 
+    fn P_nir_identity() -> [vec2; 4] {
         let nir_size = xy{x: 2048, y: 1152};
         let size = xy{x: nir_size.y*7/5/2, y: nir_size.y/2};
         let offset = (nir_size-size)/2;
         let side_length = size.x/7;
         [xy{x: side_length, y: side_length}, xy{x: size.x-side_length, y: side_length}, xy{x: size.x-side_length, y: size.y-side_length}, xy{x: side_length, y: size.y-side_length}].map(|p| vec2::from(offset+p))
-    })},
-    _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
-    _ir: None,
-    align: false,
-}}}
+    }
+    fn new() -> Self { Self{
+        nir: Some(NIR::new()),
+        mode: Mode::Place,
+        last: None, 
+        calibration: std::fs::read("calibration").map(|data| *bytemuck::from_bytes(&data)).unwrap_or([Self::P_nir_identity(); 2]),
+        _ir: None,
+        _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
+        debug_which: "visible", debug:"", 
+        last_frame: [None, None, None], 
+    }}
+}
 impl ui::Widget for App {
     fn size(&mut self, _: size) -> size { xy{x:2592,y:1944} }
     fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
@@ -73,17 +77,6 @@ impl ui::Widget for App {
 
         let scale = num::Ratio{num: 15, div: 16}; // 2048->1920 x 1152->1080
         assert_eq!(scale*nir.size, target.size);
-        let P_nir_identity = {
-            let size = uint2::from(0.5*vec2::from(xy{x: target.size.y*7/5, y: target.size.y}));
-            let offset = xy{x:(nir.size.x-size.x)/2, y: nir.size.y-size.y}; // Use bottom part
-            //let offset = xy{x:(nir.size.x-size.x)/2, y: 0}; // Use top part
-            {
-                //[xy{x: , y: 0.}, xy{x: nir.size.x as f32, y: 0.}, xy{x: nir.size.x as f32, y: nir.size.y as f32}, xy{x: 0., y: nir.size.y as f32}]
-                // Inner corners
-                let side_length = size.x/7;
-                [xy{x: side_length, y: side_length}, xy{x: size.x-side_length, y: side_length}, xy{x: size.x-side_length, y: size.y-side_length}, xy{x: side_length, y: size.y-side_length}]
-            }.map(|p| vec2::from(offset+p))
-        };
         
         let map = |P:[[vec2; 4]; 2]| -> mat3 {
             let M = P.map(|P| {
@@ -95,43 +88,41 @@ impl ui::Widget for App {
             mul(inverse(M[1]), mul(A, M[0]))
         };
         
-        if let Some(calibration) = self.calibration {
-            {let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
-            {let size=target.size; for y in 0..target.size.y { target[xy{x: 0, y}] = 0xFFFFFF; target[xy{x: size.x-1, y}] = 0xFFFFFF; }}
-            if self.align {
-                let A = map([P_nir_identity, calibration]);
-                let vector::MinMax{min, max} = vector::minmax(nir.iter().copied()).unwrap(); // FIXME
-                let scale = 1./f32::from(scale);
-                //let ref full_nir = nir;
-                let source = full_nir.as_ref();
-                for y in 0..target.size.y {
-                    for x in 0..target.size.x {
-                        let p = scale*xy{x: x as f32, y: y as f32}; // ->nir
-                        let p = apply(A, p);
-                        let offset = (full_nir.size-nir.size)/2;
-                        let p = vec2::from(offset)+p;
-                        if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
-                        let s = source[uint2::from(p)];
-                        target[xy{x,y}] = u32::from(bgr8::from(((s-min)*0xFF/(max-min)) as u8)); // nearest: 2048x1152 -> 1920x1080
-                    }
-                }
-            } else {
-                let vector::MinMax{min, max} = vector::minmax(nir.iter().copied()).unwrap(); // FIXME
-                let scale = 1./f32::from(scale);
-                let source = full_nir.as_ref();
-                for y in 0..target.size.y {
-                    for x in 0..target.size.x {
-                        let p = scale*xy{x: x as f32, y: y as f32}; // ->nir
-                        let offset = (full_nir.size-nir.size)/2;
-                        let p = vec2::from(offset)+p;
-                        if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
-                        let s = source[uint2::from(p)];
-                        target[xy{x,y}] = u32::from(bgr8::from(((s-min)*0xFF/(max-min)) as u8)); // nearest: 2048x1152 -> 1920x1080
-                    }
+        {let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
+        {let size=target.size; for y in 0..target.size.y { target[xy{x: 0, y}] = 0xFFFFFF; target[xy{x: size.x-1, y}] = 0xFFFFFF; }}
+        if let Mode::Use = self.mode {
+            let A = map(self.calibration);
+            let vector::MinMax{min, max} = vector::minmax(nir.iter().copied()).unwrap(); // FIXME
+            let scale = 1./f32::from(scale);
+            //let ref full_nir = nir;
+            let source = full_nir.as_ref();
+            for y in 0..target.size.y {
+                for x in 0..target.size.x {
+                    let p = scale*xy{x: x as f32, y: y as f32}; // ->nir
+                    let p = apply(A, p);
+                    let offset = (full_nir.size-nir.size)/2;
+                    let p = vec2::from(offset)+p;
+                    if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
+                    let s = source[uint2::from(p)];
+                    target[xy{x,y}] = u32::from(bgr8::from(((s-min)*0xFF/(max-min)) as u8)); // nearest: 2048x1152 -> 1920x1080
                 }
             }
             return Ok(());
-        }
+        } /*else {
+            let vector::MinMax{min, max} = vector::minmax(nir.iter().copied()).unwrap(); // FIXME
+            let scale = 1./f32::from(scale);
+            let source = full_nir.as_ref();
+            for y in 0..target.size.y {
+                for x in 0..target.size.x {
+                    let p = scale*xy{x: x as f32, y: y as f32}; // ->nir
+                    let offset = (full_nir.size-nir.size)/2;
+                    let p = vec2::from(offset)+p;
+                    if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
+                    let s = source[uint2::from(p)];
+                    target[xy{x,y}] = u32::from(bgr8::from(((s-min)*0xFF/(max-min)) as u8)); // nearest: 2048x1152 -> 1920x1080
+                }
+            }
+        }*/
         
         let debug = if self.debug_which=="visible" {self.debug} else{""};
         if debug=="original" { image::scale(target, nir.as_ref()); return Ok(()) }
@@ -148,6 +139,10 @@ impl ui::Widget for App {
         let P_nir = P_nir.map(|P_nir| long_edge_first(top_left_first(P_nir)));
         let Ok(P_nir) = P_nir else { let (_, scale, offset) = image::scale(target, high.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00000); } return Ok(()); };
         self.last = Some(P_nir);
+        if let Mode::Replace = self.mode {
+            self.calibration[0] = P_nir;
+            self.mode = Mode::Calibrate; 
+        }
         if debug=="quads" { let (_, scale, offset) = image::scale(target, nir.as_ref()); for a in P_nir { cross(target, scale, offset, a, 0xFF0000); } return Ok(()) }
 
         /*let ir = Camera::next_or_saved_or_start(&mut self.ir, &mut self.last_frame[2], "ir",xy{x:256,y:192});
@@ -163,7 +158,7 @@ impl ui::Widget for App {
         for (i,&p) in P_hololens.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
         affine_blit(target, target_size, nir.as_ref(), map([P_hololens, P_nir]), hololens.size, 2);
         affine_blit(target, target_size, ir.as_ref(), map([P_hololens, P_ir]), hololens.size, 1);*/
-        if let Some(calibration) = self.calibration {
+        /*if let Some(calibration) = self.calibration {
             {let size=target.size; for x in 0..target.size.x { /*target[xy{x, y:0}] = 0xFFFFFF;*/ target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
             //let (_target_size, scale, offset) = scale(target, nir.as_ref());
             {
@@ -227,7 +222,41 @@ impl ui::Widget for App {
                 let scale = f32::from(scale);
                 for (i,&p) in P_nir_identity.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); } //DEBUG
             }*/
-        }
+        }*/
+        let offset = xy{x: 0, y: 0};
+        /*let A = map([P_nir, Self::P_nir_identity()]);
+        let P = P_nir.map(|p| apply(A, p));*/
+        let P = match self.mode {
+            Mode::Place => P_nir,
+            Mode::Calibrate => {
+                let scale = f32::from(scale);
+                for (i,&p) in P_nir.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
+                self.calibration[0]
+            },
+            _ => unreachable!(),
+        };
+        //assert_eq!(calibration.map(|p| apply(map, p)), P_nir_identity);
+        let scale = f32::from(scale);
+        //for (i,&p) in P.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
+        let [p00,p10,p11,p01] = P;
+        for i in 0..3 { for j in 0..5 {
+            let color = if (i%2==1) ^ (j%2==1) { 0xFFFFFF } else { 0 };
+            let p = |di,dj| {
+                let [i, j] = [i+di, j+dj];
+                let [u, v] = [i as f32/3., j as f32/5.];
+                let p0 = (1.-u)*p00+u*p01;
+                let p1 = (1.-u)*p10+u*p11;
+                let p = (1.-v)*p0+v*p1;
+                vec2::from(offset)+scale*p
+            };
+            let P : [vec2; 4] = [p(0,0),p(0,1),p(1,1),p(1,0)];
+            let vector::MinMax{min, max} = vector::minmax(P).unwrap();
+            let [p00,p10,p11,p01] = P;
+            for y in min.y as u32..=max.y as u32 { for x in min.x as u32..=max.x as u32 {
+                let p = vec2::from(xy{x,y});
+                if [p00,p10,p11,p01,p00].array_windows().all(|&[a,b]| vector::cross2(p-a,b-a)<0.) { if let Some(target) = target.get_mut(xy{x,y}) { *target |= color; } }
+            }}
+        }}
         Ok(())
     }
     fn event(&mut self, _: vector::size, context: &mut ui::EventContext, event: &ui::Event) -> ui::Result<bool> {
@@ -241,19 +270,23 @@ impl ui::Widget for App {
                     //if self.ir.is_none() { self.ir = Some(IR::new()); }
                 }
             } else if key=='\n' {
-                if self.calibration.is_none() {
-                    self.calibration = self.last;
+                //if self.calibration.is_none() {
+                    self.calibration[1] = self.last.unwrap();
                     //context.set_title(&format!("{}", self.calibration.is_some()));
-                    std::fs::write("calibration", bytemuck::bytes_of(&self.calibration.unwrap())).unwrap();
-                } else {
+                    std::fs::write("calibration", bytemuck::bytes_of(&self.calibration)).unwrap();
+                    self.mode = Mode::Use; 
+                /*} else {
                     self.calibration = None;
-                }
+                }*/
+            } else if key==' ' {
+                self.mode = Mode::Replace;
+            } else if key=='⌫' {
+                self.mode = Mode::Place; 
             } else {
                 fn starts_with<'t>(words: &[&'t str], key: char) -> Option<&'t str> { words.into_iter().find(|word| key==word.chars().next().unwrap()).copied() }
                 if let Some(word) = starts_with(&[/*"hololens",*/"visible"/*,"ir"*/], key) { self.debug_which = word }
                 else if let Some(word) = starts_with(&["blur","contour","response","erode","normalize","low","max","original","z","points","quads","threshold"], key) { self.debug = word; }
-                //else { self.debug_which=""; self.debug="";  }
-                else { self.align = !self.align; }
+                else { self.debug_which=""; self.debug="";  }
                 context.set_title(&format!("{} {}", self.debug_which, self.debug));
             }
             Ok(true)
