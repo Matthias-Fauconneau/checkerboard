@@ -43,8 +43,8 @@ pub fn max(data: &[u16]) -> u16 {
     }).map(|thread| thread.join().unwrap() )).iter().sum::<u16x32>().reduce_max() // FIXME: skipping unaligned tail*/
 }
 
-const fn headroom(R: usize) -> u32 { (R+1+R).next_power_of_two().ilog2() }
-pub fn transpose_box_convolve_scale<const R: usize, const THREADS : usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
+const fn headroom(R: u32) -> u32 { (R+1+R).next_power_of_two().ilog2() }
+pub fn transpose_box_convolve_scale<const R: u32, const THREADS : usize>(source: Image<&[u16]>, factor: u32) -> Image<Box<[u16]>> {
     let mut transpose = Image::<Box<[u16]>>::uninitialized(source.size.yx());
     {
         assert!(R+1+R < (1<<headroom(R)) && R+1+R > (1<<(headroom(R)-1)), "{R} {}", headroom(R));
@@ -144,18 +144,18 @@ pub fn transpose_box_convolve_slow(source: Image<&[u16]>, R: u32) -> Image<Box<[
     transpose
 }
 
-pub fn transpose_box_convolve<const R: usize, const THREADS : usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R, THREADS>(source, (1<<(16-headroom(R))) / (R+1+R) as u32) }
+pub fn transpose_box_convolve<const R: u32, const THREADS : usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R, THREADS>(source, (1<<(16-headroom(R))) / (R+1+R) as u32) }
 
-pub fn transpose_box_convolve_scale_max<const R: usize, const THREADS : usize>(source: Image<&[u16]>, max: u16) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R, THREADS>(source, (1<<(32-headroom(R))) / (max as u32*(R+1+R) as u32)) }
+pub fn transpose_box_convolve_scale_max<const R: u32, const THREADS : usize>(source: Image<&[u16]>, max: u16) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R, THREADS>(source, (1<<(32-headroom(R))) / (max as u32*(R+1+R) as u32)) }
 
-pub fn blur<const R: usize, const THREADS : usize>(image: Image<&[u16]>) -> Option<Image<Box<[u16]>>> { 
+pub fn blur<const R: u32, const THREADS : usize>(image: Image<&[u16]>) -> Option<Image<Box<[u16]>>> { 
     let max = max(image.data);
     if max == 0 { return None; }
     let x = transpose_box_convolve_scale_max::<R, THREADS>(image, max);
     Some(transpose_box_convolve::<R, THREADS>(x.as_ref()))
 }
 
-pub fn normalize<const R: usize, const THREADS : usize>(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u16]>> {
+pub fn normalize<const R: u32, const THREADS : usize>(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u16]>> {
     let max = max(image.data);
     /*let x = transpose_box_convolve_scale_max::<R, THREADS>(image.as_ref(), max);
     let mut blur_then_normal = transpose_box_convolve::<R, THREADS>(x.as_ref());*/
@@ -379,9 +379,8 @@ pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, 
     Ok(long_edge_first(top_left_first(Q)))
 }
 
-fn cross_response<const THREADS: usize>(high: Image<&[u16]>) -> Option<Image<Box<[u16]>>> {
+fn cross_response<const R : u32, const THREADS: usize>(high: Image<&[u16]>) -> Option<Image<Box<[u16]>>> {
     let mut cross = Image::zero(high.size);
-    const R : u32 = 32;  //3;
     for y in R..high.size.y-R {
         for x in R..high.size.x-R {
             let [p00,p10,p01,p11] = {let r=R as i32;[xy{x:-r,y:-r},xy{x:r,y:-r},xy{x:-r,y:r},xy{x:r,y:r}]}.map(|d|high[(xy{x,y}.signed()+d).unsigned()]);
@@ -392,11 +391,11 @@ fn cross_response<const THREADS: usize>(high: Image<&[u16]>) -> Option<Image<Box
             }
         }
     }
-    blur::<32, THREADS>(cross.as_ref())
+    Some(cross)//blur::<R, THREADS>(cross.as_ref())
 }
 
-pub fn checkerboard_direct_intersections<const THREADS: usize>(high: Image<&[u16]>, _max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
-    let Some(cross) = self::cross_response::<THREADS>(high.as_ref()) else { return Err(high.clone()) };
+pub fn checkerboard_direct_intersections<const R : u32, const THREADS: usize>(high: Image<&[u16]>, _max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
+    let Some(cross) = self::cross_response::<R, THREADS>(high.as_ref()) else { return Err(high.clone()) };
     if debug=="response" { return Err(cross); }
     
     let threshold = otsu(cross.as_ref()); //foreground_mean
@@ -436,8 +435,8 @@ pub fn checkerboard_direct_intersections<const THREADS: usize>(high: Image<&[u16
     Ok(points)
 }
 
-pub fn refine<const THREADS: usize>(high: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static str) -> Result<[vec2; 4],(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)> {
-    let cross = cross_response::<THREADS>(high.as_ref()).unwrap();
+/*pub fn refine<const R: u32, const THREADS: usize>(high: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static str) -> Result<[vec2; 4],(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)> {
+    let cross = cross_response::<R, THREADS>(high.as_ref()).unwrap();
 
     for _ in 0..1 {
         let grid = {
@@ -468,7 +467,7 @@ pub fn refine<const THREADS: usize>(high: Image<&[u16]>, mut points: [vec2; 4], 
         points = [xy{x:-1./2.,y:-1./2.},xy{x:1./2.,y:-1./2.},xy{x:1./2.,y:1./2.},xy{x:-1./2.,y:1./2.}].map(|xy{x,y}| center + x*row_axis + y*column_axis);
     }
     Ok(points)
-}
+}*/
 
 pub fn cross(target: &mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, color:u32) {
     let mut plot = |dx,dy| {
