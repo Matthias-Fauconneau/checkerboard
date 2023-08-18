@@ -25,7 +25,7 @@ mod matrix; use matrix::*;
 mod image; use image::*;
 mod bt40; use bt40::*;
 
-#[derive(Debug)] enum Mode { Place, Calibrate, Use, Replace }
+#[derive(Debug,Clone,Copy)] enum Mode { Place, Calibrate, Use, Replace }
 struct Calibrated<T> {
     camera: T,
     calibration: [[vec2; 4]; 2],
@@ -47,7 +47,7 @@ impl<T:Camera> Calibrated<T> {
     }
 }
 struct App {
-    nir: Calibrated<NIR>,
+    nir: Option<Calibrated<NIR>>,
     mode: Mode,
     last: Option<[vec2; 4]>,
     ir: Calibrated<IR>,
@@ -58,7 +58,7 @@ struct App {
 }
 impl App { 
     fn new() -> Self { Self{
-        nir: Calibrated::<NIR>::new("nir"/*,xy{x: 2048, y: 1152}*/),
+        nir: None,//Calibrated::<NIR>::new("nir"/*,xy{x: 2048, y: 1152}*/),
         mode: Mode::Place,
         last: None, 
         ir: Calibrated::<IR>::new("ir"),
@@ -68,7 +68,7 @@ impl App {
     }}
     fn calibration(&mut self) -> &mut [[vec2; 4]; 2] {
         match self.which {
-            "nir" => &mut self.nir.calibration,
+            //"nir" => &mut self.nir.calibration,
             "ir" => &mut self.ir.calibration,
             _ => unimplemented!(),
         }
@@ -87,11 +87,11 @@ impl ui::Widget for App {
         let P_hololens = long_edge_first(top_left_first(simplify(convex_hull(&points.into_iter().map(vec2::from).collect::<Box<_>>())).try_into().unwrap()));
         if debug=="quads" { let (_, scale, offset) = scale(target, hololens.as_ref()); for a in P_hololens { cross(target, scale, offset, a, 0xFF00FF); } return Ok(()) }*/
 
-        let full_nir = Camera::next_or_saved_or_start(&mut self.nir.map(|nir| nir.camera), &mut self.last_frame[1], "nir",xy{x:2592,y:1944});
+        /*let full_nir = self.nir.camera.next();
         //let nir = {let size = nir.size/128*128; nir.slice((nir.size-size)/2, size)}; // 2592x1944 => 2560x1920
         //let nir = {let size = xy{x: nir.size.x, y: nir.size.x/16*9}; nir.slice((nir.size-size)/2, size)};  // 16:9 => 2592x1458|2560x1440
         let nir = {let ref nir = full_nir; let size = xy{x: nir.size.x/128/16*16*128, y: nir.size.x/128/16*9*128}; nir.slice((nir.size-size)/2, size)};  // 16:9 => 2048x1152
-        //let nir = {let x = nir.size.x/64*64; nir.slice(xy{x: (nir.size.x-x)/2, y: 0}, xy{x, y: nir.size.y})}; // Both dimensions need to be aligned because of transpose (FIXME: only align stride+height)
+        //let nir = {let x = nir.size.x/64*64; nir.slice(xy{x: (nir.size.x-x)/2, y: 0}, xy{x, y: nir.size.y})}; // Both dimensions need to be aligned because of transpose (FIXME: only align stride+height)*/
 
         let ir = self.ir.camera.next();
         
@@ -99,9 +99,10 @@ impl ui::Widget for App {
         //assert_eq!(scale*nir.size, target.size);
         //let scale = num::Ratio{num: 45, div: 8}; // 192->1080
 
-        let (source, offset) = match which {
-            "nir" => (full_nir.as_ref(), (full_nir.size-nir.size)/2),
+        let (source, offset) = match self.which {
+            //"nir" => (full_nir.as_ref(), (full_nir.size-nir.size)/2),
             "ir" => (ir.as_ref(), xy{x: 0, y: 0}),
+            which => unreachable!("{which}"),
         };
         let scale = num::Ratio{num: target.size.y, div: source.size.y};
         
@@ -118,7 +119,7 @@ impl ui::Widget for App {
         {let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
         {let size=target.size; for y in 0..target.size.y { target[xy{x: 0, y}] = 0xFFFFFF; target[xy{x: size.x-1, y}] = 0xFFFFFF; }}
         if let Mode::Use = self.mode {
-            let A = map(self.calibration);
+            let A = map(*self.calibration());
             let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap(); // FIXME
             let scale = 1./f32::from(scale);
             for y in 0..target.size.y {
@@ -136,34 +137,35 @@ impl ui::Widget for App {
 
         let debug = self.debug;
         let P = match self.which {
-            "nir" => {
+            /*"nir" => {
                 if debug=="original" { image::scale(target, nir.as_ref()); return Ok(()) }
                 let low = blur::<4, 4>(nir.as_ref()).unwrap(); // 9ms
                 if debug=="blur" { image::scale(target, low.as_ref()); return Ok(()) }
                 /*let high = self::normalize::<42>(low.as_ref(), 0x1000);
-                if debug=="normalize" { scale(target, high.as_ref()); return Ok(()) }*/
+                if debug=="high" { scale(target, high.as_ref()); return Ok(()) }*/
                 let high = low.as_ref();
                 //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 0/*Blur is enough*/ /*9*/, /*min_side: */64., debug, target)  else { return Ok(()) };
                 //let high = nir.as_ref();
-                let points = match checkerboard_direct_intersections<32,4>(high.as_ref(), /*max_distance:*/64, debug) { Ok(points) => points, Err(image) => {image::scale(target, image.as_ref()); return Ok(()) }};
+                let points = match checkerboard_direct_intersections::<32,4>(high.as_ref(), /*max_distance:*/64, debug) { Ok(points) => points, Err(image) => {image::scale(target, image.as_ref()); return Ok(()) }};
                 if debug=="points" { let (_, scale, offset) = image::scale(target, high.as_ref()); for &a in &points { cross(target, scale, offset, a.into(), 0xFF0000); } return Ok(()) }
                 let P = simplify(convex_hull(&points.iter().copied().map(vec2::from).collect::<Box<_>>())).try_into();
                 let P = P.map(|P_nir| long_edge_first(top_left_first(P_nir)));
                 let Ok(P) = P else { let (_, scale, offset) = image::scale(target, high.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00000); } return Ok(()); };
                 if debug=="quads" { let (_, scale, offset) = image::scale(target, nir.as_ref()); for a in P { cross(target, scale, offset, a, 0xFF0000); } return Ok(()) }
                 P
-            }
+            }*/
             "ir" => {
-                if debug=="original" { scale(target, ir.as_ref()); return Ok(()); }
-                /*let Some(high) = checkerboard::normalize_slow/*::<16, 2>*/(ir.as_ref(), 16, 0x2000) else {scale(target, ir.as_ref()); return Ok(()) };
-                if debug=="normalize" { scale(target, high.as_ref()); return Ok(()) };//ir.as_ref();*/
-                let points = match checkerboard_direct_intersections::<3, 2>(/*high*/ir.as_ref(), 32, debug) { Ok(points) => points, Err(image) => {scale(target, image.as_ref()); return Ok(()) }};
-                if debug=="points" { let (_, scale, offset) = scale(target, ir.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); } return Ok(())}
+                if debug=="original" { image::scale(target, ir.as_ref()); return Ok(()); }
+                /*let Some(high) = checkerboard::normalize_slow/*::<16, 2>*/(ir.as_ref(), 16, 0x2000) else {image::scale(target, ir.as_ref()); return Ok(()) };
+                if debug=="high" { image::scale(target, high.as_ref()); return Ok(()) };*///ir.as_ref();
+                let points = match checkerboard_direct_intersections::<3, 2>(/*high*/ir.as_ref(), 32, debug) { Ok(points) => points, Err(image) => {image::scale(target, image.as_ref()); return Ok(()) }};
+                if debug=="points" { let (_, scale, offset) = image::scale(target, ir.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); } return Ok(())}
                 let P = fit_rectangle(&points);
-                if debug=="quads" { let (_, scale, offset) = scale(target, ir.as_ref()); for a in P { cross(target, scale, offset, a, 0xFF00FF); } return Ok(())}
+                if debug=="quads" { let (_, scale, offset) = image::scale(target, ir.as_ref()); for a in P { cross(target, scale, offset, a, 0xFF00FF); } return Ok(())}
                 P
-            }
-        }
+            },
+            _ => unreachable!()
+        };
 
         self.last = Some(P);
         if let Mode::Replace = self.mode {
@@ -171,78 +173,7 @@ impl ui::Widget for App {
             self.mode = Mode::Calibrate; 
         }
 
-        /*let (target_size, scale, offset) = scale(target, hololens.as_ref());
-        for (i,&p) in P_hololens.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }    
-        affine_blit(target, target_size, nir.as_ref(), map([P_hololens, P_nir]), hololens.size, 2);
-        affine_blit(target, target_size, ir.as_ref(), map([P_hololens, P_ir]), hololens.size, 1);*/
-        /*if let Some(calibration) = self.calibration {
-            {let size=target.size; for x in 0..target.size.x { /*target[xy{x, y:0}] = 0xFFFFFF;*/ target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
-            //let (_target_size, scale, offset) = scale(target, nir.as_ref());
-            {
-                let A = map([P_nir_identity, calibration]);
-                let vector::MinMax{min, max} = vector::minmax(nir.iter().copied()).unwrap(); // FIXME
-                let scale = 1./f32::from(scale);
-                let source = nir.as_ref();
-                for y in 0..target.size.y {
-                    for x in 0..target.size.x {
-                        let p = scale*xy{x: x as f32, y: y as f32}; // ->nir
-                        let p = apply(A, p);
-                        if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
-                        let s = source[uint2::from(p)];
-                        target[xy{x,y}] = u32::from(bgr8::from(((s-min)*0xFF/(max-min)) as u8)); // nearest: 2048x1152 -> 1920x1080
-                    }
-                }
-            }
-            let offset = xy{x: 0, y: 0};
-            let A = map([calibration, P_nir_identity]);
-            let P = P_nir.map(|p| apply(A, p));
-            //assert_eq!(calibration.map(|p| apply(map, p)), P_nir_identity);
-            let scale = f32::from(scale);
-            for (i,&p) in P.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
-            let [p00,p10,p11,p01] = P;
-            for i in 0..3 { for j in 0..5 {
-                let color = if (i%2==1) ^ (j%2==1) { 0xFFFFFF } else { 0 };
-                let p = |di,dj| {
-                    let [i, j] = [i+di, j+dj];
-                    let [u, v] = [i as f32/3., j as f32/5.];
-                    let p0 = (1.-u)*p00+u*p01;
-                    let p1 = (1.-u)*p10+u*p11;
-                    let p = (1.-v)*p0+v*p1;
-                    vec2::from(offset)+scale*p
-                };
-                let P : [vec2; 4] = [p(0,0),p(0,1),p(1,1),p(1,0)];
-                let vector::MinMax{min, max} = vector::minmax(P).unwrap();
-                let [p00,p10,p11,p01] = P;
-                for y in min.y as u32..=max.y as u32 { for x in min.x as u32..=max.x as u32 {
-                    let p = vec2::from(xy{x,y});
-                    if [p00,p10,p11,p01,p00].array_windows().all(|&[a,b]| vector::cross2(p-a,b-a)<0.) { if let Some(target) = target.get_mut(xy{x,y}) { *target |= color; } }
-                }}
-            }}
-        } else {
-            {let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
-            //{let (_, scale, offset) = image::scale(target, nir.as_ref()); for a in P_nir { cross(target, scale, offset, a, 0x00FF00); }} // DEBUG
-            {
-                let size = uint2::from(0.5*vec2::from(xy{x: target.size.y*7/5, y: target.size.y}));
-                let offset = xy{x:(target.size.x-size.x)/2, y: target.size.y-size.y}; // Use bottom part
-                //let offset = xy{x:(target.size.x-size.x)/2, y: 0}; // Use top part
-                let mut target = target.slice_mut(offset, size);
-                let side_length = target.size.x/7;
-                for y in 0..size.y {
-                    for x in 0..size.x {
-                        let [j, i] = [x,y].map(|x| x/side_length);
-                        target[xy{x,y}] |= if (i%2==1) ^ (j%2==1) { 0xFFFFFF } else { 0 };
-                    }
-                }
-            }
-            /*{
-                let offset = xy{x: 0, y: 0};
-                let scale = f32::from(scale);
-                for (i,&p) in P_nir_identity.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); } //DEBUG
-            }*/
-        }*/
         let offset = xy{x: 0, y: 0};
-        /*let A = map([P_nir, Self::P_nir_identity()]);
-        let P = P_nir.map(|p| apply(A, p));*/
         let P = match self.mode {
             Mode::Place => P,
             Mode::Calibrate => {
@@ -252,12 +183,12 @@ impl ui::Widget for App {
             },
             mode => unreachable!("{mode:?}"),
         };
-        //assert_eq!(calibration.map(|p| apply(map, p)), P_nir_identity);
         let scale = f32::from(scale);
-        //for (i,&p) in P.iter().enumerate() { cross(target, scale, offset, p, [0xFF_0000,0x00_FF00,0x00_00FF,0xFF_FFFF][i]); }
         let [p00,p10,p11,p01] = P;
+        target.fill(0);
         for i in 0..3 { for j in 0..5 {
             let color = if (i%2==1) ^ (j%2==1) { 0xFFFFFF } else { 0 };
+            if color == 0 { continue; }
             let p = |di,dj| {
                 let [i, j] = [i+di, j+dj];
                 let [u, v] = [i as f32/3., j as f32/5.];
@@ -271,12 +202,12 @@ impl ui::Widget for App {
             let [p00,p10,p11,p01] = P;
             for y in min.y as u32..=max.y as u32 { for x in min.x as u32..=max.x as u32 {
                 let p = vec2::from(xy{x,y});
-                if [p00,p10,p11,p01,p00].array_windows().all(|&[a,b]| vector::cross2(p-a,b-a)<0.) { if let Some(target) = target.get_mut(xy{x,y}) { *target |= color; } }
+                if [p00,p10,p11,p01,p00].array_windows().all(|&[a,b]| vector::cross2(p-a,b-a)<0.) { if let Some(target) = target.get_mut(xy{x,y}) { *target = color; } }
             }}
         }}
         Ok(())
     }
-    fn event(&mut self, _: vector::size, context: &mut ui::EventContext, event: &ui::Event) -> ui::Result<bool> {
+    fn event(&mut self, _: vector::size, _context: &mut ui::EventContext, event: &ui::Event) -> ui::Result<bool> {
         if let &ui::Event::Key(key) = event {
             if ['⎙','\u{F70C}'].contains(&key) {
                 println!("⎙");
@@ -299,9 +230,9 @@ impl ui::Widget for App {
                 self.mode = Mode::Place; 
             } else {
                 fn starts_with<'t>(words: &[&'t str], key: char) -> Option<&'t str> { words.into_iter().find(|word| key==word.chars().next().unwrap()).copied() }
-                if let Some(word) = starts_with(&[/*"hololens",*/"nir","ir"], key) { self.which = word }
-                else if let Some(word) = starts_with(&["blur","contour","response","erode","normalize","low","max","original","z","points","quads","threshold"], key) { self.debug = word; }
-                else { self.which=""; self.debug="";  }
+                if let Some(word) = starts_with(&["nir","ir"], key) { self.which = word }
+                else if let Some(word) = starts_with(&["blur","contour","response","erode","high","low","max","original","z","points","quads","threshold"], key) { self.debug = word; }
+                else { self.debug="";  }
                 //context.set_title(&format!("{} {}", self.which, self.debug));
             }
             Ok(true)
