@@ -29,7 +29,7 @@ impl super::Camera for IR {
             assert!(unsafe{uvc_stream_start(stream, None, null_mut(), 0)} >= 0);
             return Self(stream);
         }
-        panic!();
+        panic!("UVC IR camera 0x5840 not found");
     }
     fn next(&mut self) -> Image<Box<[u16]>> {
         use uvc::*;

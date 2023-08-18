@@ -1,11 +1,8 @@
 #![allow(dead_code, unused_imports)]
 use {num::{sq, zero}, vector::{xy, uint2, int2, vec2, cross2, norm, minmax, MinMax}, image::Image, ui::time};
-use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u8x32, u16x32, u32x16, u32x8, u64x8}}, core::arch::{x86_64::*}};
-//unsafe fn noop_low(a: u16x32) -> __m256i { _mm512_extracti64x4_epi64(a.into(), 0) }
+use {std::{ops::Range, array::from_fn, simd::{Simd as SIMD, SimdUint as _, SimdMutPtr as _, SimdOrd as _, u8x32, u16x32, u32x16, u32x8, u64x8}}, core::arch::x86_64::*};
 unsafe fn _mm512_noop_low(a: __m512i) ->__m256i { _mm512_extracti64x4_epi64(a, 0) }
 unsafe fn _mm512_high_to_low(a: __m512i) ->__m256i { _mm512_extracti64x4_epi64(a, 1) }
-//unsafe fn _mm512_high_to_low_32x16(a: u32x16) ->__m256i { _mm512_high_to_low(a.into()) }
-//unsafe fn _mm512_high_to_low_16x32(a: u32x16) ->__m256i { _mm512_high_to_low(a.into()) }
 unsafe fn noop_low(a: impl Into<__m512i>) ->__m256i { _mm512_noop_low(a.into()) }
 unsafe fn high_to_low(a: impl Into<__m512i>) ->__m256i { _mm512_high_to_low(a.into()) }
 unsafe fn cast_u32(a: u16x32) -> [u32x16; 2] { [_mm512_cvtepu16_epi32(noop_low(a)).into(), _mm512_cvtepu16_epi32(high_to_low(a)).into()] }
@@ -25,22 +22,6 @@ pub fn max(data: &[u16]) -> u16 {
     let mut max = SIMD::splat(0);
     unsafe{while sample < end { max = max.simd_max(sample.read()); sample = sample.add(1); }};
     max.reduce_max()
-    /*let ref task = |i0, i1| unsafe {
-        let mut max = SIMD::splat(0);
-        let [start, end] = [i0,i1].map(|i| data.as_ptr().add(i as usize));
-        let [mut sample, end] = [start, end].map(|p| p as *const u16x32);
-        while sample < end { max = max.simd_max(sample.read()); sample = sample.add(1); }
-        max
-    };
-    let range = 0..data.len();
-    const THREADS : usize = 2;
-    std::thread::scope(|s| from_fn::<_, THREADS, _>(|thread| {
-        let i0 = range.start + (range.end-range.start)/(32*THREADS)*(32*THREADS)*thread/THREADS;
-        let i1 = range.start + (range.end-range.start)/(32*THREADS)*(32*THREADS)*(thread+1)/THREADS;
-        assert_eq!((i1-i0)%32, 0, "{} {i0} {i1} {}", range.start, range.end);
-        let thread = std::thread::Builder::new().spawn_scoped(s, move || task(i0, i1)).unwrap();
-        thread
-    }).map(|thread| thread.join().unwrap() )).iter().sum::<u16x32>().reduce_max() // FIXME: skipping unaligned tail*/
 }
 
 const fn headroom(R: u32) -> u32 { (R+1+R).next_power_of_two().ilog2() }
@@ -112,40 +93,7 @@ pub fn transpose_box_convolve_scale<const R: u32, const THREADS : usize>(source:
     transpose
 }
 
-pub fn transpose_box_convolve_slow(source: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> {
-    let mut transpose = Image::uninitialized(source.size.yx());
-    // /*const*/let factor : u32 = 0x1000 / (R+1+R) as u32;
-    let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
-    if !(min < max) { return transpose;}
-    for y in 0..source.size.y {
-        let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
-        for x in 0..R { sum += source[xy{x, y}] as u32; }
-        for x in 0..R {
-            sum += source[xy{x: x+R, y}] as u32;
-            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
-            sum -= source[xy{x: 0, y}] as u32;
-        }
-        for x in R..source.size.x-R {
-            sum += source[xy{x: x+R, y}] as u32;
-            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-            //transpose[xy{x: y, y: x}] = (sum / (R+1+R) as u32) as u16;
-            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
-            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
-        }
-        for x in source.size.x-R..source.size.x {
-            sum += source[xy{x: source.size.x-1, y}] as u32;
-            //transpose[xy{x: y, y: x}] = ((sum * factor) >> 12) as u16;
-            //transpose[xy{x: y, y: x}] = (sum / (R+1+R) as u32) as u16;
-            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
-            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
-        }
-    }
-    transpose
-}
-
 pub fn transpose_box_convolve<const R: u32, const THREADS : usize>(source: Image<&[u16]>) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R, THREADS>(source, (1<<(16-headroom(R))) / (R+1+R) as u32) }
-
 pub fn transpose_box_convolve_scale_max<const R: u32, const THREADS : usize>(source: Image<&[u16]>, max: u16) -> Image<Box<[u16]>> { transpose_box_convolve_scale::<R, THREADS>(source, (1<<(32-headroom(R))) / (max as u32*(R+1+R) as u32)) }
 
 pub fn blur<const R: u32, const THREADS : usize>(image: Image<&[u16]>) -> Option<Image<Box<[u16]>>> { 
@@ -157,9 +105,9 @@ pub fn blur<const R: u32, const THREADS : usize>(image: Image<&[u16]>) -> Option
 
 pub fn normalize<const R: u32, const THREADS : usize>(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u16]>> {
     let max = max(image.data);
-    /*let x = transpose_box_convolve_scale_max::<R, THREADS>(image.as_ref(), max);
-    let mut blur_then_normal = transpose_box_convolve::<R, THREADS>(x.as_ref());*/
-    let mut blur_then_normal = transpose_box_convolve_slow(transpose_box_convolve_slow(image.as_ref(), R as u32).as_ref(), R as u32);
+    let x = transpose_box_convolve_scale_max::<R, THREADS>(image.as_ref(), max);
+    let mut blur_then_normal = transpose_box_convolve::<R, THREADS>(x.as_ref());
+    //let mut blur_then_normal = transpose_box_convolve_slow(transpose_box_convolve_slow(image.as_ref(), R as u32).as_ref(), R as u32);
     assert_eq!(image.stride, blur_then_normal.stride);
     let max = SIMD::splat(max as u32);
     let ref task = |i0, i1, blur_then_normal_chunk:&mut [u16]| unsafe {
@@ -199,21 +147,48 @@ pub fn normalize<const R: u32, const THREADS : usize>(image: Image<&[u16]>, thre
     blur_then_normal
 }
 
-pub fn normalize_slow(image: Image<&[u16]>, R: u32, threshold: u16) -> Option<Image<Box<[u16]>>> {
+pub fn transpose_box_convolve_slow(source: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> {
+    let mut transpose = Image::uninitialized(source.size.yx());
+    let MinMax{min, max} = minmax(source.iter().copied()).unwrap();
+    if !(min < max) { return transpose;}
+    for y in 0..source.size.y {
+        let mut sum = (source[xy{x: 0, y}] as u32)*(R as u32);
+        for x in 0..R { sum += source[xy{x, y}] as u32; }
+        for x in 0..R {
+            sum += source[xy{x: x+R, y}] as u32;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: 0, y}] as u32;
+        }
+        for x in R..source.size.x-R {
+            sum += source[xy{x: x+R, y}] as u32;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        }
+        for x in source.size.x-R..source.size.x {
+            sum += source[xy{x: source.size.x-1, y}] as u32;
+            transpose[xy{x: y, y: x}] = ((sum-min as u32*(R+1+R) as u32) as u64*0xFFFF / ((max-min) as u32*(R+1+R) as u32) as u64) as u16;
+            sum -= source[xy{x: (x as i32-R as i32) as u32, y}] as u32;
+        }
+    }
+    transpose
+}
+pub fn blur_slow(image: Image<&[u16]>, R: u32) -> Image<Box<[u16]>> { transpose_box_convolve_slow(transpose_box_convolve_slow(image.as_ref(), R as u32).as_ref(), R as u32) }
+pub fn normalize_slow(image: Image<&[u16]>, R: u32, _threshold: u16) -> Option<Image<Box<[u16]>>> {
     let vector::MinMax{min, max} = vector::minmax(image.iter().copied()).unwrap();
     if !(min < max) { return None; }
-    let mut blur_then_normal = transpose_box_convolve_slow(transpose_box_convolve_slow(image.as_ref(), R as u32).as_ref(), R as u32);
+    let mut blur_then_normal = blur_slow(image.as_ref(), R as u32);
     blur_then_normal.as_mut().zip_map(&image, |&low, &p| {
         let high = (p-min) as u32*0xFFFF/(max-min) as u32;
         assert!(high <= 0xFFFF);
-        let low = low.max(threshold);
+        /*let low = low.max(threshold);
         let div = ((high*0xFFFF/low as u32)>>3) as u16;
-        div
+        div*/
+        (0x8000+high as i32-low as i32).clamp(0,0xFFFF) as u16
     });
     Some(blur_then_normal)
 }
 
-fn otsu(image: Image<&[u16]>) -> u16 {
+pub fn otsu(image: Image<&[u16]>) -> u16 {
     assert!(image.len() < 1<<24);
     let mut histogram : [u32; 0x10000] = [0; 0x10000];
     let mut pixel = 0;
@@ -249,40 +224,24 @@ fn binary16(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u
     false => if p>threshold { 0xFFFF } else { 0 },
     true => if p<threshold { 0xFFFF } else { 0 }
 }))}
-/*fn binary(image: Image<&[u16]>, threshold: u16, inverse: bool) -> Image<Box<[u8]>> { Image::from_iter(image.size, image.iter().map(|&p| match inverse {
-    false => if p>threshold { 0xFF } else { 0 },
-    true => if p<threshold { 0xFF } else { 0 }
-}))}*/
-fn binary(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u8]>> { 
+
+fn binary<const INVERSE: bool>(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u8]>> { 
     let mut target = Image::<Box<[u8]>>::uninitialized(image.size);
     {
         assert_eq!(image.stride, target.stride);
-        //let len = image.len();
-        /*let image = image.as_ptr();
-        let target = target.as_mut_ptr();
-        for i in 0..len {unsafe{
-            *target.add(i) = if *image.add(i) > threshold { 0xFF } else { 0 };
-        }}*/
         let Range{start: mut image, end} = image.as_ptr_range();
         let mut target = target.as_mut_ptr();
         while image < end {unsafe{
-            *target = if *image > threshold { 0xFF } else { 0 };
+            *target = if *image > threshold { if INVERSE { 0 } else { 0xFF } } else { if INVERSE { 0xFF } else { 0 } };
             image = image.add(1);
             target = target.add(1);
         }}
-        /*let [mut image, end] = [image, end].map(|p| p as *const u16x32);
-        let mut target = target as *mut u8x32;
-        while image < end {unsafe{
-            *target = u8x32::from(_mm256_mask_blend_epi8(_mm512_cmpgt_epu16_mask((*image).into(), u16x32::splat(threshold).into()), u8x32::splat(0).into(), u8x32::splat(0xFF).into()));
-            image = image.add(1);
-            target = target.add(1);
-        }}*/
     }
     target
 }
 
-/*fn erode(high: Image<&[u16]>, erode_steps: usize, threshold: u16) -> Image<Box<[u8]>> {
-    let mut binary = self::binary(high.as_ref(), threshold/*, false*/);
+fn erode<const INVERSE: bool>(high: Image<&[u16]>, erode_steps: usize, threshold: u16) -> Image<Box<[u8]>> {
+    let mut binary = self::binary::<INVERSE>(high.as_ref(), threshold);
     let mut erode = Image::zero(binary.size);
     for i in 0..erode_steps {
         for y in 1..erode.size.y-1 {
@@ -296,7 +255,7 @@ fn binary(image: Image<&[u16]>, threshold: u16) -> Image<Box<[u8]>> {
         std::mem::swap(&mut binary, &mut erode);
     }
     binary
-}*/
+}
 
 fn quads(contours: &[imageproc::contours::Contour<u16>], min_area: f32) -> Box<[[vec2; 4]]> {
     let mut quads = Vec::new();
@@ -317,7 +276,7 @@ fn quads(contours: &[imageproc::contours::Contour<u16>], min_area: f32) -> Box<[
         let Some([a,b,c,d]) = quad(&contour) else {continue;};
         let area = {let abc = cross2(b-a,c-a); if abc<0. {continue;} let cda = cross2(d-c,a-c); if cda<0. {continue;} (abc+cda)/2.};
         if area < min_area { continue; }
-        if [a,b,c,d,a].array_windows().any(|&[a,b]| vector::sq(b-a)>256.*256.) {continue;}
+        if [a,b,c,d,a].array_windows().any(|&[a,b]| vector::sq(b-a)>64.*64./*256.*256.*/) {continue;}
         quads.push([a,b,c,d]);
     }
     quads.into_boxed_slice()
@@ -344,7 +303,7 @@ pub fn convex_hull(points: &[vec2]) -> Vec<vec2> {
     Q
 }
 
-pub fn simplify(mut P: Vec<vec2>) -> Vec<vec2> {
+/*pub fn simplify(mut P: Vec<vec2>) -> Vec<vec2> {
     // Simplifies polygon to 4 corners
     while P.len() > 4 {
         P.remove(((0..P.len()).map(|i| {
@@ -353,25 +312,85 @@ pub fn simplify(mut P: Vec<vec2>) -> Vec<vec2> {
         }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%P.len());
     }
     P
+}*/
+
+pub fn simplify(mut P: Vec<vec2>) -> [vec2; 4] {
+    // Simplifies polygon to 4 corners
+    while P.len() > 4 {
+        let (_, [a,b], p) = P.iter().enumerate().map_windows(|[(_a,&A),(b,&B),(c,&C),(_d,&D)]| {
+            use vector::xyz;
+            let xy1 = |xy{x,y}| xyz{x,y,z:1.};
+            let P = vector::cross(xy1(B-A),xy1(C-D));
+            if P.z.abs() > 1. {
+                let P = xy{x:P.x/P.z, y:P.y/P.z};
+                let area = cross2(P-B,C-B).abs()/*FIXME*/;
+                assert!(area >= 0., "{A} {B} {C} {D} {P} {area}");
+                (area, [*b,*c], P)
+            } else {
+                (0., [*b,*c], B) // Remove colinear vertices
+            }
+        }).min_by(|(a,_,_),(b,_,_)| a.total_cmp(b)).unwrap();
+        assert_eq!(a+1, b);
+        P[a] = p;
+        P.remove(b);
+    }
+    P.try_into().unwrap()
 }
 
 pub fn top_left_first(Q: [vec2; 4]) -> [vec2; 4] { let i0 = Q.iter().enumerate().min_by(|(_,a),(_,b)| (a.x+a.y).total_cmp(&(b.x+b.y))).unwrap().0; [0,1,2,3].map(|i|Q[(i0+i)%4]) }
 pub fn long_edge_first(mut Q: [vec2; 4]) -> [vec2; 4] { if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); } Q }
 
-pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, min_side: f32, debug: &'static str) -> Result<[vec2; 4],Image<Box<[u16]>>> {
+pub fn checkerboard_quad<const INVERSE: bool>(high: Image<&[u16]>, erode_steps: usize, min_side: f32, debug: &'static str) -> Result<[vec2; 4],Image<Box<[u16]>>> {
     let threshold = otsu(high.as_ref());
-    if debug=="threshold" { return Err(binary16(high.as_ref(), threshold, false)); }
-    //let erode = time!(erode(high.as_ref(), erode_steps, threshold));
-    assert_eq!(erode_steps, 0); // Blur is enough
-    let erode = self::binary(high.as_ref(), threshold);
+    if debug=="threshold" { return Err(binary16(high.as_ref(), threshold, INVERSE)); }
+    let erode = erode::<INVERSE>(high.as_ref(), erode_steps, threshold);
+    //assert_eq!(erode_steps, 0); // Blur is enough
+    //let erode = self::binary::<INVERSE>(high.as_ref(), threshold);
     if debug=="erode" { return Err(Image::from_iter(erode.size, erode.iter().map(|&p| (p as u16)<<8))); }
     let ref contours = imageproc::contours::find_contours::<u16>(&imagers::GrayImage::from_vec(erode.size.x, erode.size.y, erode.data.into_vec()).unwrap());
     if debug=="contour" { let mut target = Image::zero(erode.size); for contour in contours { for p in &contour.points { target[xy{x: p.x as u32, y: p.y as u32}] = 0xFFFF; }} return Err(target); }
-    let quads = time!(quads(contours, sq(min_side))); // 1s
+    let quads = quads(contours, sq(min_side)); // 0.2s
+    /*let connectivity = vec![0; quads.len()*quads.len()];
+    for (i,P) in quads.iter().enumerate() {
+        for &p in P {
+            let (_,[a,b],j) = quads.iter().enumerate().filter(|&(j,_)| i!=j).map(|(j,Q)| Q.iter().map(move |&q| (vector::sq(q-p),[q,p],j))).flatten().min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap();
+            if a!=b && vector::sq(a-b)<32.*32. { connectivity[i*quads.len()+j] = 1; }
+        }
+    }*/
+    let all_quads = quads.clone(); // debug=="quads"
+    let largest_component = {
+        let mut quads = quads.into_vec();
+        let mut largest_component = vec![];
+        while let Some(P) = quads.pop() {
+            let mut component = vec![P];
+            let mut queue = vec![P];
+            while let Some(P) = queue.pop() {
+                for p in P {
+                    if let Some((_,[a,b],j)) = quads.iter().enumerate().map(|(j,Q)| Q.iter().map(move |&q| (vector::sq(q-p),[q,p],j))).flatten().min_by(|(a,_,_),(b,_,_)| a.total_cmp(b)) {
+                        if a!=b && vector::sq(a-b)<32.*32. { let Q = quads.swap_remove(j); component.push(Q); queue.push(Q) }
+                    }
+                }
+            }
+            if component.len() > largest_component.len() { largest_component = component; }
+        }
+        largest_component
+    };
     if debug=="quads" { let mut target = Image::zero(erode.size);
-        for q in &*quads { for [&a,&b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() { for (p,_,_,_) in ui::line::generate_line(target.size, [a,b]) { target[p] = 0xFFFF; } } }
+        for q in &*all_quads { for [&a,&b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() { for (p,_,_,_) in ui::line::generate_line(target.size, [a,b]) { target[p] = 0x8000; } } }
+        for q in &*largest_component { for [&a,&b] in {let [a,b,c,d] = q; [a,b,c,d,a]}.array_windows() { for (p,_,_,_) in ui::line::generate_line(target.size, [a,b]) { target[p] = 0xFFFF; } } }
+        /*for P in &*quads { 
+            let (_,[a,b]) = quads.iter().filter(|&Q| Q!=P).map(|Q| P.iter().map(|&p| Q.iter().map(move |&q| (vector::sq(q-p),[q,p])))).flatten().flatten().min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap();
+            if a!=b { for (p,_,_,_) in ui::line::generate_line(target.size, [a,b]) { target[p] = 0xFFFF; } }
+        }*/
+        /*for P in &*quads {
+            for &p in P {
+                let (_,[a,b]) = quads.iter().filter(|&Q| Q!=P).map(|Q| Q.iter().map(move |&q| (vector::sq(q-p),[q,p]))).flatten().min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap();
+                if a!=b && vector::sq(a-b)<32.*32. { for (p,_,_,_) in ui::line::generate_line(target.size, [a,b]) { target[p] = 0x8000; } }
+            }
+        }*/
         return Err(target); 
     }
+    let quads = largest_component.into_boxed_slice();
     let points : Box<_> = quads.into_iter().map(|q| q.into_iter()).flatten().copied().collect();
     if points.len() < 4 { return Err(binary16(high.as_ref(), threshold, false)); }
     let Q = simplify(convex_hull(&*points));
@@ -379,7 +398,7 @@ pub fn checkerboard_quad(high: Image<&[u16]>, _black: bool, erode_steps: usize, 
     Ok(long_edge_first(top_left_first(Q)))
 }
 
-fn cross_response<const R : u32, const THREADS: usize>(high: Image<&[u16]>) -> Option<Image<Box<[u16]>>> {
+pub fn cross_response<const R: u32, const THREADS: usize>(high: Image<&[u16]>) -> Option<Image<Box<[u16]>>> {
     let mut cross = Image::zero(high.size);
     for y in R..high.size.y-R {
         for x in R..high.size.x-R {
@@ -391,10 +410,12 @@ fn cross_response<const R : u32, const THREADS: usize>(high: Image<&[u16]>) -> O
             }
         }
     }
-    Some(cross)//blur::<R, THREADS>(cross.as_ref())
+    //Some(cross)
+    Some(blur_slow(cross.as_ref(), 1))
+    //blur::<R, THREADS>(cross.as_ref())
 }
 
-pub fn checkerboard_direct_intersections<const R : u32, const THREADS: usize>(high: Image<&[u16]>, _max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
+pub fn checkerboard_direct_intersections<const R: u32, const THREADS: usize>(high: Image<&[u16]>, _max_distance: u32, debug: &'static str) -> std::result::Result<Vec<uint2>,Image<Box<[u16]>>> {
     let Some(cross) = self::cross_response::<R, THREADS>(high.as_ref()) else { return Err(high.clone()) };
     if debug=="response" { return Err(cross); }
     
@@ -435,20 +456,20 @@ pub fn checkerboard_direct_intersections<const R : u32, const THREADS: usize>(hi
     Ok(points)
 }
 
-/*pub fn refine<const R: u32, const THREADS: usize>(high: Image<&[u16]>, mut points: [vec2; 4], R: u32, debug: &'static str) -> Result<[vec2; 4],(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)> {
+pub fn refine<const R: u32, const THREADS: usize>(high: Image<&[u16]>, mut points: [vec2; 4], radius: u32, debug: &'static str) -> Result<[vec2; 4],(vec2, Box<[vec2]>, Box<[vec2]>, Image<Box<[uint2]>>, vec2, vec2, Image<Box<[u16]>>)> {
     let cross = cross_response::<R, THREADS>(high.as_ref()).unwrap();
 
     for _ in 0..1 {
         let grid = {
             let cross = &cross;
-            Image::from_iter(xy{x:8,y:6},
-          (1..=6).map(|y|
-                    (1..=8).map(move |x| {
-                        let xy{x, y} = xy{x: x as f32/9., y: y as f32/7.};
+            Image::from_iter(xy{x:6,y:4},
+          (1..=4).map(|y|
+                    (1..=6).map(move |x| {
+                        let xy{x, y} = xy{x: x as f32/7., y: y as f32/5.};
                         let [A,B,C,D] = points.clone();
                         let p = y*(x*A+(1.-x)*B) + (1.-y)*(x*D+(1.-x)*C);
                         let p = xy{x: p.x.round() as u32, y: p.y.round() as u32,};
-                        let (p,_) = (p.y-R..p.y+R).map(|y| (p.x-R..p.x+R).map(move |x| xy{x,y})).flatten().map(|p| (p, cross[p])).max_by_key(|(_,v)| *v).unwrap_or((p,0));
+                        let (p,_) = (p.y-radius..p.y+radius).map(|y| (p.x-radius..p.x+radius).map(move |x| xy{x,y})).flatten().map(|p| (p, cross[p])).max_by_key(|(_,v)| *v).unwrap_or((p,0));
                         p
                     }
                     )
@@ -458,16 +479,16 @@ pub fn checkerboard_direct_intersections<const R : u32, const THREADS: usize>(hi
         let ref ref_grid = grid;
         let rows = (0..grid.size.y).map(|y| (0..grid.size.x).map(move |x| ref_grid[xy{x,y}]));
         let columns = (0..grid.size.x).map(|x| (0..grid.size.y).map(move|y| ref_grid[xy{x,y}]));
-        let column = rows.map(|row| row.map(|p| vec2::from(p)).sum::<vec2>()/8.).collect::<Box<_>>();
-        let row = columns.map(|column| column.map(|p| vec2::from(p)).sum::<vec2>()/6.).collect::<Box<_>>();
+        let column = rows.map(|row| row.map(|p| vec2::from(p)).sum::<vec2>()/6.).collect::<Box<_>>();
+        let row = columns.map(|column| column.map(|p| vec2::from(p)).sum::<vec2>()/4.).collect::<Box<_>>();
         let row_axis = row.last().unwrap()-row[0];
         let column_axis = column.last().unwrap()-column[0];
-        let center = grid.iter().map(|&p| vec2::from(p)).sum::<vec2>()/(8.*6.);
+        let center = grid.iter().map(|&p| vec2::from(p)).sum::<vec2>()/(6.*4.);
         if debug != "" { return Err((center, row, column, grid, row_axis, column_axis, cross)); }
         points = [xy{x:-1./2.,y:-1./2.},xy{x:1./2.,y:-1./2.},xy{x:1./2.,y:1./2.},xy{x:-1./2.,y:1./2.}].map(|xy{x,y}| center + x*row_axis + y*column_axis);
     }
     Ok(points)
-}*/
+}
 
 pub fn cross(target: &mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, color:u32) {
     let mut plot = |dx,dy| {
@@ -478,9 +499,9 @@ pub fn cross(target: &mut Image<&mut[u32]>, scale:f32, offset:uint2, p:vec2, col
     for dx in -64..64 { plot(dx, 0); }
 }
 
-pub fn checkerboard_quad_debug(nir: Image<&[u16]>, black: bool, erode_steps: usize, min_side: f32, debug: &'static str, target: &mut Image<&mut [u32]>) -> Option<[vec2; 4]> { 
+pub fn checkerboard_quad_debug<const INVERSE: bool>(nir: Image<&[u16]>, erode_steps: usize, min_side: f32, debug: &'static str, target: &mut Image<&mut [u32]>) -> Option<[vec2; 4]> { 
     use super::image::scale;
-    match checkerboard_quad(nir.as_ref(), black, erode_steps, min_side, debug) {
+    match checkerboard_quad::<INVERSE>(nir.as_ref(), erode_steps, min_side, debug) {
         Err(image) => { scale(target, image.as_ref()); None }
         Ok(points) => {
             /*let points = match refine(nir.as_ref(), points, 0/*128*/, debug) {

@@ -141,7 +141,7 @@ pub fn affine_blit(target: &mut Image<&mut[u32]>, fit_size: uint2, source: Image
 }
 
 pub fn write_raw(name: &str, image: Image<&[u16]>) { std::fs::write(format!("{name}.{}x{}",image.size.x, image.size.y), &bytemuck::cast_slice(&image)).unwrap() }
-fn cast_slice_box<A,B>(input: Box<[A]>) -> Box<[B]> { // ~bytemuck but allows unequal align size
+pub(crate) fn cast_slice_box<A,B>(input: Box<[A]>) -> Box<[B]> { // ~bytemuck but allows unequal align size
     unsafe{Box::<[B]>::from_raw({let len=std::mem::size_of::<A>() * input.len() / std::mem::size_of::<B>(); core::slice::from_raw_parts_mut(Box::into_raw(input) as *mut B, len)})}
 }
 pub fn raw(name: &str, size: uint2) -> Option<Image<Box<[u16]>>> { Some(Image::new(size, cast_slice_box(std::fs::read(format!("{name}.{}x{}",size.x,size.y)).ok()?.into_boxed_slice()))) }
