@@ -34,7 +34,7 @@ impl<T:Camera> Calibrated<T> {
 struct App {
     nir: Calibrated<NIR>,
     ir: Calibrated<IR>,
-    //fluo: Calibrated<NIR>,
+    fluo: Calibrated<NIR>,
     mode: Mode,
     last: Option<[vec2; 4]>,
     _bt40: Option<BT40>,
@@ -48,7 +48,7 @@ impl App {
     fn new() -> Self { Self{
         nir: Calibrated::<NIR>::new("nir","4104585450", false),
         ir: Calibrated::<IR>::new("ir","", false),
-        //fluo: Calibrated::<NIR>::new("fluo","4104590291", true),
+        fluo: Calibrated::<NIR>::new("fluo","4104590291", true),
         mode: Mode::Use,
         last: None, 
         _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
@@ -74,11 +74,13 @@ impl ui::Widget for App {
         let nir = {let ref nir = full_nir; let size = xy{x: nir.size.x/128/16*16*128, y: nir.size.x/128/16*9*128}; nir.slice((nir.size-size)/2, size)};  // 16:9 => 2048x1152
         
         let ir = self.ir.camera.next();
-                
-        //{let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
-        //{let size=target.size; for y in 0..target.size.y { target[xy{x: 0, y}] = 0xFFFFFF; target[xy{x: size.x-1, y}] = 0xFFFFFF; }}
+
+        let full_fluo = self.fluo.camera.next();
+        let fluo = {let ref fluo = full_fluo; let size = xy{x: fluo.size.x/128/16*16*128, y: fluo.size.x/128/16*9*128}; fluo.slice((fluo.size-size)/2, size)};  // 16:9 => 2048x1152
+
         if let Mode::Use = self.mode {
-            let ref ir_nir = [(ir.as_ref(), self.ir.calibration, xy{x: 0, y: 0}), (full_nir.as_ref(), self.nir.calibration, (full_nir.size-nir.size)/2)].map(|(source, calibration, source_offset)| {
+            let ref ir_nir_fluo = [(ir.as_ref(), self.ir.calibration, xy{x: 0, y: 0}), (full_nir.as_ref(), self.nir.calibration, (full_nir.size-nir.size)/2), (full_fluo.as_ref(), self.fluo.calibration, (full_fluo.size-fluo.size)/2)]
+            .map(|(source, calibration, source_offset)| {
                 let scale = num::Ratio{num: target.size.y, div: source.size.y};
                 let target_offset = xy{x: (target.size.x-scale*source.size.x)/2, y: (target.size.y-scale*source.size.y)/2};
                 let A = homography(calibration);
@@ -87,7 +89,7 @@ impl ui::Widget for App {
             });
             for y in 0..target.size.y {
                 for x in 0..target.size.x {
-                    let [ir, nir] = ir_nir.each_ref().map(|(source, source_offset, scale, target_offset, A, min, max)| {
+                    let [ir, nir, fluo] = ir_nir_fluo.each_ref().map(|(source, source_offset, scale, target_offset, A, min, max)| {
                         if !(min<max) { 0 } else {
                             let scale_from_target_to_source = 1./f32::from(*scale);
                             let p = scale_from_target_to_source*(xy{x: x as f32, y: y as f32} - vec2::from(*target_offset)); // target->source
@@ -99,7 +101,7 @@ impl ui::Widget for App {
                             }
                         }
                     });
-                    target[xy{x,y}] = u32::from(bgr8::from([ir,nir,nir]));
+                    target[xy{x,y}] = u32::from(bgr8::from([ir,nir,fluo]));
                 }
             }
             return Ok(());
@@ -107,6 +109,7 @@ impl ui::Widget for App {
         let source = match self.which {
             "ir" => ir.as_ref(),
             "nir" => full_nir.as_ref(),
+            "fluo" => full_fluo.as_ref(),
             _ => unreachable!()
         };
         let scale = num::Ratio{num: target.size.y, div: source.size.y};
@@ -117,6 +120,22 @@ impl ui::Widget for App {
             "nir" => {
                 if debug=="original" { image::scale(target, nir.as_ref()); return Ok(()) }
                 let low = blur::<4, 4>(nir.as_ref()).unwrap(); // 9ms
+                if debug=="blur" { image::scale(target, low.as_ref()); return Ok(()) }
+                /*let high = self::normalize::<42>(low.as_ref(), 0x1000);
+                if debug=="high" { scale(target, high.as_ref()); return Ok(()) }*/
+                let high = low.as_ref();
+                //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 0/*Blur is enough*/ /*9*/, /*min_side: */64., debug, target)  else { return Ok(()) };
+                //let high = nir.as_ref();
+                let points = match checkerboard_direct_intersections::<32,4>(high.as_ref(), /*max_distance:*/64, debug) { Ok(points) => points, Err(image) => {image::scale(target, image.as_ref()); return Ok(()) }};
+                let Q = convex_hull(&points.iter().copied().map(vec2::from).collect::<Box<_>>());
+                if debug=="points" || Q.len() < 4 { let (_, scale, offset) = image::scale(target, high.as_ref()); for &a in &points { cross(target, scale, offset, a.into(), 0xFF0000); } return Ok(()) }
+                let P = long_edge_first(top_left_first(simplify(Q)));
+                if debug=="quads" { let (_, scale, offset) = image::scale(target, nir.as_ref()); for a in P { cross(target, scale, offset, a, 0xFF0000); } return Ok(()) }
+                P
+            },
+            "fluo" => {
+                if debug=="original" { image::scale(target, fluo.as_ref()); return Ok(()) }
+                let low = blur::<4, 4>(fluo.as_ref()).unwrap(); // 9ms
                 if debug=="blur" { image::scale(target, low.as_ref()); return Ok(()) }
                 /*let high = self::normalize::<42>(low.as_ref(), 0x1000);
                 if debug=="high" { scale(target, high.as_ref()); return Ok(()) }*/
@@ -162,34 +181,6 @@ impl ui::Widget for App {
                 let P = convex_hull(&points.iter().copied().map(vec2::from).collect::<Box<_>>());
                 if P.len() < 4 || debug=="points" { let (_, scale, offset) = image::scale(target, ir.as_ref()); for a in points { checkerboard::cross(target, scale, offset, a.into(), 0xFF00FF); } return Ok(())}
                 let P = simplify(P);
-                //if points.len() < 4  || debug=="points" { let (_, scale, offset) = image::scale(target, ir.as_ref()); for a in points { checkerboard::cross(target, scale, offset, a.into(), 0xFF00FF); } return Ok(())}
-                //let P = fit_rectangle(&points);
-                /*let P = match checkerboard_quad::<true>(high.as_ref(), 3, /*min_side*/1., debug) { Ok(points) => points, Err(image) => {image::scale(target, image.as_ref()); return Ok(()) }};
-                if debug=="response" {
-                    let cross = cross_response::<3, 2>(high.as_ref()).unwrap();
-                    image::scale(target, cross.as_ref()); return Ok(()) 
-                }
-                let P = match refine::<3, 2>(ir.as_ref(), P, 16, debug) {
-                    Err((center, row, column, grid, row_axis, column_axis, corner)) => {
-                        let (_, scale, offset) = image::scale(target, corner.as_ref());
-                        cross(target, scale, offset, center, 0xFFFFFF);
-                        for x in 0..grid.size.x {
-                            cross(target, scale, offset, row[x as usize], 0x00FF00);
-                        }
-                        for y in 0..grid.size.y {
-                            cross(target, scale, offset, column[y as usize], 0x00FF00);
-                            for x in 0..grid.size.x {
-                                cross(target, scale, offset, grid[xy{x,y}].into(), 0x00FFFF);
-                                let xy{x, y} = xy{x: x as f32/7.,  y: y as f32/5.};
-                                let xy{x, y} = xy{x: x-1./2., y: y-1./2.};
-                                let p = center + x*row_axis + y*column_axis;
-                                cross(target, scale, offset, p, 0xFF00FF); // purple
-                            }
-                        }
-                        return Ok(());
-                    }
-                    Ok(points) => points
-                };*/
                 if debug=="quads" { let (_, scale, offset) = image::scale(target, ir.as_ref()); for a in P { checkerboard::cross(target, scale, offset, a, 0xFF00FF); } return Ok(())}
                 P
             },
@@ -278,7 +269,7 @@ impl ui::Widget for App {
                 std::fs::write(self.which, bytemuck::bytes_of(&*self.calibration())).unwrap();
             } else {
                 fn starts_with<'t>(words: &[&'t str], key: char) -> Option<&'t str> { words.into_iter().find(|word| key==word.chars().next().unwrap()).copied() }
-                if let Some(word) = starts_with(&["nir","ir"], key) { self.which = word }
+                if let Some(word) = starts_with(&["nir","ir","fluo"], key) { self.which = word }
                 else if let Some(word) = starts_with(&["blur","contour","response","erode","high","low","max","original","z","points","quads","threshold"], key) { self.debug = word; }
                 else { self.debug="";  }
                 //context.set_title(&format!("{} {}", self.which, self.debug));
