@@ -47,7 +47,7 @@ impl<T:Camera> Calibrated<T> {
     }
 }
 struct App {
-    //nir: Calibrated<NIR>,
+    nir: Calibrated<NIR>,
     mode: Mode,
     last: Option<[vec2; 4]>,
     ir: Calibrated<IR>,
@@ -60,19 +60,19 @@ struct App {
 }
 impl App { 
     fn new() -> Self { Self{
-        //nir: Calibrated::<NIR>::new("nir"/*,xy{x: 2048, y: 1152}*/),
+        nir: Calibrated::<NIR>::new("nir"/*,xy{x: 2048, y: 1152}*/),
         mode: Mode::Use,//Place,
         last: None, 
         ir: Calibrated::<IR>::new("ir"),
         _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
-        which: "ir", debug:"", 
+        which: "nir", debug:"", 
         //last_frame: [None, None, None], 
         save: false,
         min: xy{x: 0, y: 0}, max: xy{x: 0, y: 0},
     }}
     fn calibration(&mut self) -> &mut [[vec2; 4]; 2] {
         match self.which {
-            //"nir" => &mut self.nir.calibration,
+            "nir" => &mut self.nir.calibration,
             "ir" => &mut self.ir.calibration,
             _ => unimplemented!(),
         }
@@ -83,54 +83,46 @@ impl ui::Widget for App {
     fn paint(&mut self, target: &mut ui::Target, _: ui::size, _: ui::int2) -> ui::Result {
         if target.size == (xy{x: 960, y: 540}) { return Ok(()); } // WORKAROUND: winit first request paint at wrong scale factor
         
-        /*let hololens = Camera::next_or_saved_or_start(&mut self.hololens,&mut self.last_frame[0], "hololens",xy{x:1280,y:720});
-        let debug = if self.debug_which=="hololens" {self.debug} else{""};
-        if debug=="original" { scale(target, hololens.as_ref()); return Ok(()) }
-        let points = match checkerboard_direct_intersections(hololens.as_ref(), 64, debug) { Ok(points) => points, Err(image) => {scale(target, image.as_ref()); return Ok(()) }};
-        if debug=="points" { let (_, scale, offset) = scale(target, hololens.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00FF); } return Ok(()) }
-        let P_hololens = long_edge_first(top_left_first(simplify(convex_hull(&points.into_iter().map(vec2::from).collect::<Box<_>>())).try_into().unwrap()));
-        if debug=="quads" { let (_, scale, offset) = scale(target, hololens.as_ref()); for a in P_hololens { cross(target, scale, offset, a, 0xFF00FF); } return Ok(()) }*/
-
-        /*let full_nir = self.nir.camera.next();
-        //let nir = {let size = nir.size/128*128; nir.slice((nir.size-size)/2, size)}; // 2592x1944 => 2560x1920
-        //let nir = {let size = xy{x: nir.size.x, y: nir.size.x/16*9}; nir.slice((nir.size-size)/2, size)};  // 16:9 => 2592x1458|2560x1440
+        let full_nir = self.nir.camera.next();
         let nir = {let ref nir = full_nir; let size = xy{x: nir.size.x/128/16*16*128, y: nir.size.x/128/16*9*128}; nir.slice((nir.size-size)/2, size)};  // 16:9 => 2048x1152
-        //let nir = {let x = nir.size.x/64*64; nir.slice(xy{x: (nir.size.x-x)/2, y: 0}, xy{x, y: nir.size.y})}; // Both dimensions need to be aligned because of transpose (FIXME: only align stride+height)*/
-
-        //let ir = Image::new(xy{x: 256, y:192}, image::cast_slice_box(std::fs::read("ir").ok().unwrap().into_boxed_slice()));  
-        let ir = self.ir.camera.next();
-        if self.save { self.save=false; std::fs::write("ir", bytemuck::cast_slice(&*ir)).unwrap();  }
-        //let scale = num::Ratio{num: 15, div: 16}; // 2048->1920 x 1152->1080
-        //assert_eq!(scale*nir.size, target.size);
-        //let scale = num::Ratio{num: 45, div: 8}; // 192->1080
-
-        let (source, source_offset) = match self.which {
-            //"nir" => (full_nir.as_ref(), (full_nir.size-nir.size)/2),
-            "ir" => (ir.as_ref(), xy{x: 0, y: 0}),
-            which => unreachable!("{which}"),
-        };
-        let scale = num::Ratio{num: target.size.y, div: source.size.y};
-        let target_offset = xy{x: (target.size.x-scale*source.size.x)/2, y: (target.size.y-scale*source.size.y)/2};
         
+        let ir = self.ir.camera.next();
+                
         {let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
         {let size=target.size; for y in 0..target.size.y { target[xy{x: 0, y}] = 0xFFFFFF; target[xy{x: size.x-1, y}] = 0xFFFFFF; }}
         if let Mode::Use = self.mode {
-            let A = homography(*self.calibration());
-            let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap(); // FIXME
-            if !(min<max) { return Ok(()); }
-            let scale_from_target_to_source = 1./f32::from(scale);
-            for y in 0..target.size.y {
-                for x in 0..target.size.x {
-                    let p = scale_from_target_to_source*(xy{x: x as f32, y: y as f32} - vec2::from(target_offset)); // target->source
-                    let p = apply(A, p);
-                    let p = vec2::from(source_offset)+p;
-                    if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
-                    let s = source[uint2::from(p)];
-                    target[xy{x,y}] = u32::from(bgr8::from(((s-min)*0xFF/(max-min)) as u8)); // nearest: 2048x1152 -> 1920x1080
+            for (i, source, source_offset) in [(0, ir.as_ref(), xy{x: 0, y: 0}), (1, full_nir.as_ref(), (full_nir.size-nir.size)/2)] {
+                let scale = num::Ratio{num: target.size.y, div: source.size.y};
+                let target_offset = xy{x: (target.size.x-scale*source.size.x)/2, y: (target.size.y-scale*source.size.y)/2};
+                let A = homography(*self.calibration());
+                let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap(); // FIXME
+                if !(min<max) { return Ok(()); }
+                let scale_from_target_to_source = 1./f32::from(scale);
+                for y in 0..target.size.y {
+                    for x in 0..target.size.x {
+                        let p = scale_from_target_to_source*(xy{x: x as f32, y: y as f32} - vec2::from(target_offset)); // target->source
+                        let p = apply(A, p);
+                        let p = vec2::from(source_offset)+p;
+                        if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
+                        let s = source[uint2::from(p)];
+                        let v = ((s-min)*0xFF/(max-min)) as u8;
+                        match i {
+                            1 => target[xy{x,y}] = u32::from(bgr8::from(v)),
+                            0 => {let ref mut p = target[xy{x,y}]; let mut c = bgr8::from(*p); c.b=v; *p = u32::from(c)},
+                            _ => unreachable!()
+                        };
+                    }
                 }
             }
             return Ok(());
         }
+        let source = match self.which {
+            "ir" => ir.as_ref(),
+            "nir" => full_nir.as_ref(),
+            _ => unreachable!()
+        };
+        let scale = num::Ratio{num: target.size.y, div: source.size.y};
+        let target_offset = xy{x: (target.size.x-scale*source.size.x)/2, y: (target.size.y-scale*source.size.y)/2};
 
         let debug = self.debug;
         let P = match self.which {
