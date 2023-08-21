@@ -61,7 +61,7 @@ struct App {
 impl App { 
     fn new() -> Self { Self{
         //nir: Calibrated::<NIR>::new("nir"/*,xy{x: 2048, y: 1152}*/),
-        mode: Mode::Place,
+        mode: Mode::Use,//Place,
         last: None, 
         ir: Calibrated::<IR>::new("ir"),
         _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
@@ -111,22 +111,13 @@ impl ui::Widget for App {
         };
         let scale = num::Ratio{num: target.size.y, div: source.size.y};
         let target_offset = xy{x: (target.size.x-scale*source.size.x)/2, y: (target.size.y-scale*source.size.y)/2};
-
-        let map = |P:[[vec2; 4]; 2]| -> mat3 {
-            let M = P.map(|P| {
-                let center = P.into_iter().sum::<vec2>() / P.len() as f32;
-                let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();
-                [[scale.x, 0., -scale.x*center.x], [0., scale.y, -scale.y*center.y], [0., 0., 1.]]
-            });
-            let A = homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
-            mul(inverse(M[1]), mul(A, M[0]))
-        };
         
         {let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
         {let size=target.size; for y in 0..target.size.y { target[xy{x: 0, y}] = 0xFFFFFF; target[xy{x: size.x-1, y}] = 0xFFFFFF; }}
         if let Mode::Use = self.mode {
-            let A = map(*self.calibration());
+            let A = homography(*self.calibration());
             let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap(); // FIXME
+            if !(min<max) { return Ok(()); }
             let scale_from_target_to_source = 1./f32::from(scale);
             for y in 0..target.size.y {
                 for x in 0..target.size.x {
@@ -289,10 +280,22 @@ impl ui::Widget for App {
                     std::fs::write(self.which, bytemuck::bytes_of(&*self.calibration())).unwrap();
                     self.mode = Mode::Use; 
                 }
-            } else if key==' ' {
-                self.mode = Mode::Replace;
-            } else if key=='⌫' {
-                self.mode = Mode::Place; 
+            }
+            else if key==' ' { self.mode = Mode::Replace; }
+            else if key=='⌫' { self.mode = Mode::Place; } 
+            else if ['-','+','↑','↓','←','→'].contains(&key) {
+                //println!("{:?} {:?}", self.ir.calibration, apply(homography(self.ir.calibration), xy{x:1./2., y:1./2.}));
+                self.ir.calibration[1] = self.ir.calibration[1].map(|p| match key {
+                    '-' => (1.-0.1)*p,
+                    '+' => 1.1*p,
+                    '↑' => xy{x: p.x, y: p.y-1.},
+                    '↓' => xy{x: p.x, y: p.y+1.},
+                    '←' => xy{x: p.x-1., y: p.y},
+                    '→' => xy{x: p.x+1., y: p.y},
+                    _ => unreachable!()
+                });
+                //println!("{:?} {:?}", self.ir.calibration, apply(homography(self.ir.calibration), xy{x:1./2., y:1./2.}));
+                std::fs::write(self.which, bytemuck::bytes_of(&*self.calibration())).unwrap();
             } else {
                 fn starts_with<'t>(words: &[&'t str], key: char) -> Option<&'t str> { words.into_iter().find(|word| key==word.chars().next().unwrap()).copied() }
                 if let Some(word) = starts_with(&["nir","ir"], key) { self.which = word }
@@ -306,4 +309,17 @@ impl ui::Widget for App {
 }
 #[cfg(debug_assertions)] const TITLE: &'static str = "#[cfg(debug_assertions)]";
 #[cfg(not(debug_assertions))] const TITLE: &'static str = "Checkerboard";
-fn main() -> ui::Result { ui::run(TITLE, &mut App::new()) }
+fn main() -> ui::Result { 
+    if false {
+        struct Test {}
+        impl ui::Widget for Test {
+            fn paint(&mut self, _target: &mut ui::Target, _size: size, _offset: int2) -> ui::Result {
+
+                Ok(())
+            }
+        }
+        ui::run(TITLE, &mut Test{}) 
+    } else {
+        ui::run(TITLE, &mut App::new()) 
+    }
+}

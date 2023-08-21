@@ -32,7 +32,7 @@ pub fn direct_linear_transform(P: [[vec2; 4]; 2]) -> mat2x3 {
 	//[[H[0],H[1]],[H[2],H[3]],[H[4],H[5]]]
 	[[H[0],H[2],H[4]],[H[1],H[3],H[5]]]
 }*/
-pub fn homography(P: [[vec2; 4]; 2]) -> mat3 {
+pub fn _homography(P: [[vec2; 4]; 2]) -> mat3 {
 	let mut AtA = nalgebra::SMatrix::<f32, 9, 9>::zeros();
 	for [p,P] in transpose(P) {
 		let x = [P.x,P.y,1., 0.,0.,0., -p.x*P.x, -p.x*P.y, -p.x];
@@ -44,4 +44,14 @@ pub fn homography(P: [[vec2; 4]; 2]) -> mat3 {
 	let H: [_; 9] = H.as_slice().try_into().unwrap();
 	let H = H.map(|h| h / H[8]);
 	[[H[0],H[1],H[2]], [H[3],H[4],H[5]], [H[6],H[7],H[8]]]
+}
+
+pub fn homography(P: [[vec2; 4]; 2]) -> mat3 {
+	let M = P.map(|P| {
+		let center = P.into_iter().sum::<vec2>() / P.len() as f32;
+		let scale = P.len() as f32 / P.iter().map(|p| (p-center).map(f32::abs)).sum::<vec2>();
+		[[scale.x, 0., -scale.x*center.x], [0., scale.y, -scale.y*center.y], [0., 0., 1.]]
+	});
+	let A = _homography([P[1].map(|p| apply(M[1], p)), P[0].map(|p| apply(M[0], p))]);
+	mul(inverse(M[1]), mul(A, M[0]))
 }
