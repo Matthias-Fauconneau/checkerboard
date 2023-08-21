@@ -1,3 +1,4 @@
+//sudo sh -c 'echo 32 > /sys/module/usbcore/parameters/usbfs_memory_mb'
 #![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit,generic_arg_infer,array_try_map,array_windows,slice_take,stdsimd,iter_map_windows)]
 #![allow(non_camel_case_types,non_snake_case,unused_imports,dead_code)]
 use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}, ui::time};
@@ -20,13 +21,13 @@ struct Calibrated<T> {
     calibration: [[vec2; 4]; 2],
 }
 impl<T:Camera> Calibrated<T> {
+    const IDENTITY : [vec2; 4] = [xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}];
     fn new(name: &str, serial_number: &str, rotate: bool) -> Self { 
-        let identity = [xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}];
         Self{
             camera: T::new(serial_number), 
             calibration: std::fs::read(name).ok().filter(|data| data.len()==std::mem::size_of::<[[vec2; 4]; 2]>()).map(|data| *bytemuck::from_bytes(&data)).unwrap_or(
-                if rotate { [identity, [xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}, xy{x: 0., y: 0.}]] }
-                else { [identity; 2] }
+                if rotate { [Self::IDENTITY, [xy{x: 1., y: 1.},xy{x: 0., y: 1.}, xy{x: 0., y: 0.}, xy{x: 1., y: 0.}]] }
+                else { [Self::IDENTITY; 2] }
             )
         }
     }
@@ -52,7 +53,7 @@ impl App {
         mode: Mode::Use,
         last: None, 
         _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
-        which: "nir", debug:"", 
+        which: "fluo", debug:"", 
         //last_frame: [None, None, None], 
         save: false,
         min: xy{x: 0, y: 0}, max: xy{x: 0, y: 0},
@@ -61,6 +62,7 @@ impl App {
         match self.which {
             "nir" => &mut self.nir.calibration,
             "ir" => &mut self.ir.calibration,
+            "fluo" => &mut self.fluo.calibration,
             _ => unimplemented!(),
         }
     }
@@ -252,10 +254,14 @@ impl ui::Widget for App {
                 }
             }
             else if key==' ' { self.mode = Mode::Replace; }
-            else if key=='⌫' { self.mode = Mode::Place; } 
+            else if key=='⌫' { 
+                *self.calibration() = [Calibrated::<NIR>::IDENTITY; 2];
+                if self.which == "fluo" { self.fluo.calibration = [Calibrated::<NIR>::IDENTITY, [xy{x: 1., y: 1.},xy{x: 0., y: 1.}, xy{x: 0., y: 0.}, xy{x: 1., y: 0.}]]; }
+                //self.mode = Mode::Place; 
+            } 
             else if ['-','+','↑','↓','←','→'].contains(&key) {
                 //println!("{:?} {:?}", self.ir.calibration, apply(homography(self.ir.calibration), xy{x:1./2., y:1./2.}));
-                let offset = if self.which == "nir" { 8. } else { 1. };
+                let offset = if self.which == "fluo" {32.} else if self.which == "nir" { 8. } else { 1. };
                 self.calibration()[1] = self.calibration()[1].map(|p| match key {
                     '-' => (1.-0.1)*p,
                     '+' => 1.1*p,
