@@ -1,7 +1,7 @@
 pub struct IR(*mut uvc::uvc_stream_handle_t);
 use image::{Image, xy};
 impl super::Camera for IR {
-    fn new() -> Self {
+    fn new(_: &str) -> Self {
         use std::ptr::null_mut;
         let mut uvc = null_mut();
         use uvc::*;

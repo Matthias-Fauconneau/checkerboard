@@ -303,7 +303,7 @@ pub fn convex_hull(points: &[vec2]) -> Vec<vec2> {
     Q
 }
 
-/*pub fn simplify(mut P: Vec<vec2>) -> Vec<vec2> {
+pub fn simplify(mut P: Vec<vec2>) -> [vec2; 4] {
     // Simplifies polygon to 4 corners
     while P.len() > 4 {
         P.remove(((0..P.len()).map(|i| {
@@ -311,10 +311,10 @@ pub fn convex_hull(points: &[vec2]) -> Vec<vec2> {
             (cross2(p2-p0, p1-p0), i)
         }).min_by(|(a,_),(b,_)| a.total_cmp(b)).unwrap().1+1)%P.len());
     }
-    P
-}*/
+    P.try_into().unwrap()
+}
 
-pub fn simplify(mut P: Vec<vec2>) -> [vec2; 4] {
+/*pub fn simplify(mut P: Vec<vec2>) -> [vec2; 4] {
     // Simplifies polygon to 4 corners
     while P.len() > 4 {
         let (_, [a,b], p) = P.iter().enumerate().map_windows(|[(_a,&A),(b,&B),(c,&C),(_d,&D)]| {
@@ -335,7 +335,7 @@ pub fn simplify(mut P: Vec<vec2>) -> [vec2; 4] {
         P.remove(b);
     }
     P.try_into().unwrap()
-}
+}*/
 
 pub fn top_left_first(Q: [vec2; 4]) -> [vec2; 4] { let i0 = Q.iter().enumerate().min_by(|(_,a),(_,b)| (a.x+a.y).total_cmp(&(b.x+b.y))).unwrap().0; [0,1,2,3].map(|i|Q[(i0+i)%4]) }
 pub fn long_edge_first(mut Q: [vec2; 4]) -> [vec2; 4] { if norm(Q[2]-Q[1])+norm(Q[0]-Q[3]) > norm(Q[1]-Q[0])+norm(Q[3]-Q[2]) { Q.swap(1,3); } Q }

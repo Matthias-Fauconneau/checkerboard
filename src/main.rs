@@ -3,20 +3,9 @@
 use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}, ui::time};
 
 pub trait Camera : Sized {
-    fn new() -> Self;
+    fn new(serial_number: &str) -> Self;
     fn next(&mut self) -> Image<Box<[u16]>>;
-    /*fn next_or_saved_or_start(camera: &mut Option<Self>, clone: &mut Option<Image<Box<[u16]>>>, name: &str, size: size) -> Image<Box<[u16]>> {
-        if let Some(camera) = camera.as_mut() {let image = camera.next(); *clone = Some(image.clone()); image} 
-        else if let Some(image) = raw(name,size) { image }
-        else { *camera = Some(Self::new()); let image = camera.as_mut().unwrap().next(); *clone = Some(image.clone()); image}
-    }*/
 }
-pub struct Unimplemented;
-impl Camera for Unimplemented {
-    fn new() -> Self { Self }
-    fn next(&mut self) -> Image<Box<[u16]>> { unimplemented!() }
-}
-
 mod nir; use nir::NIR;
 mod ir; use ir::IR; 
 
@@ -31,26 +20,23 @@ struct Calibrated<T> {
     calibration: [[vec2; 4]; 2],
 }
 impl<T:Camera> Calibrated<T> {
-    /*fn P_identity(size: size) -> [vec2; 4] {
-        let size = xy{x: nir_size.y*7/5/2, y: nir_size.y/2};
-        let offset = (nir_size-size)/2;
-        let side_length = size.x/7;
-        [xy{x: side_length, y: side_length}, xy{x: size.x-side_length, y: side_length}, xy{x: size.x-side_length, y: size.y-side_length}, xy{x: side_length, y: size.y-side_length}].map(|p| vec2::from(offset+p))
-    }*/
-    fn new(name: &str/*, size: size*/) -> Self { 
+    fn new(name: &str, serial_number: &str, rotate: bool) -> Self { 
+        let identity = [xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}];
         Self{
-            camera: T::new(), 
+            camera: T::new(serial_number), 
             calibration: std::fs::read(name).ok().filter(|data| data.len()==std::mem::size_of::<[[vec2; 4]; 2]>()).map(|data| *bytemuck::from_bytes(&data)).unwrap_or(
-                [/*Self::P_identity(size)*/[xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}]; 2]
+                if rotate { [identity, [xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}, xy{x: 0., y: 0.}]] }
+                else { [identity; 2] }
             )
         }
     }
 }
 struct App {
     nir: Calibrated<NIR>,
+    ir: Calibrated<IR>,
+    //fluo: Calibrated<NIR>,
     mode: Mode,
     last: Option<[vec2; 4]>,
-    ir: Calibrated<IR>,
     _bt40: Option<BT40>,
     which: &'static str,
     debug: &'static str,
@@ -60,10 +46,11 @@ struct App {
 }
 impl App { 
     fn new() -> Self { Self{
-        nir: Calibrated::<NIR>::new("nir"/*,xy{x: 2048, y: 1152}*/),
-        mode: Mode::Use,//Place,
+        nir: Calibrated::<NIR>::new("nir","4104585450", false),
+        ir: Calibrated::<IR>::new("ir","", false),
+        //fluo: Calibrated::<NIR>::new("fluo","4104590291", true),
+        mode: Mode::Use,
         last: None, 
-        ir: Calibrated::<IR>::new("ir"),
         _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
         which: "nir", debug:"", 
         //last_frame: [None, None, None], 
@@ -88,30 +75,31 @@ impl ui::Widget for App {
         
         let ir = self.ir.camera.next();
                 
-        {let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
-        {let size=target.size; for y in 0..target.size.y { target[xy{x: 0, y}] = 0xFFFFFF; target[xy{x: size.x-1, y}] = 0xFFFFFF; }}
+        //{let size=target.size; for x in 0..target.size.x { target[xy{x, y:0}] = 0xFFFFFF; target[xy{x, y: size.y-1}] = 0xFFFFFF; }}
+        //{let size=target.size; for y in 0..target.size.y { target[xy{x: 0, y}] = 0xFFFFFF; target[xy{x: size.x-1, y}] = 0xFFFFFF; }}
         if let Mode::Use = self.mode {
-            for (i, source, source_offset) in [(0, ir.as_ref(), xy{x: 0, y: 0}), (1, full_nir.as_ref(), (full_nir.size-nir.size)/2)] {
+            let ref ir_nir = [(ir.as_ref(), self.ir.calibration, xy{x: 0, y: 0}), (full_nir.as_ref(), self.nir.calibration, (full_nir.size-nir.size)/2)].map(|(source, calibration, source_offset)| {
                 let scale = num::Ratio{num: target.size.y, div: source.size.y};
                 let target_offset = xy{x: (target.size.x-scale*source.size.x)/2, y: (target.size.y-scale*source.size.y)/2};
-                let A = homography(*self.calibration());
+                let A = homography(calibration);
                 let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap(); // FIXME
-                if !(min<max) { return Ok(()); }
-                let scale_from_target_to_source = 1./f32::from(scale);
-                for y in 0..target.size.y {
-                    for x in 0..target.size.x {
-                        let p = scale_from_target_to_source*(xy{x: x as f32, y: y as f32} - vec2::from(target_offset)); // target->source
-                        let p = apply(A, p);
-                        let p = vec2::from(source_offset)+p;
-                        if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { continue; }
-                        let s = source[uint2::from(p)];
-                        let v = ((s-min)*0xFF/(max-min)) as u8;
-                        match i {
-                            1 => target[xy{x,y}] = u32::from(bgr8::from(v)),
-                            0 => {let ref mut p = target[xy{x,y}]; let mut c = bgr8::from(*p); c.b=v; *p = u32::from(c)},
-                            _ => unreachable!()
-                        };
-                    }
+                (source, source_offset, scale, target_offset, A, min, max)
+            });
+            for y in 0..target.size.y {
+                for x in 0..target.size.x {
+                    let [ir, nir] = ir_nir.each_ref().map(|(source, source_offset, scale, target_offset, A, min, max)| {
+                        if !(min<max) { 0 } else {
+                            let scale_from_target_to_source = 1./f32::from(*scale);
+                            let p = scale_from_target_to_source*(xy{x: x as f32, y: y as f32} - vec2::from(*target_offset)); // target->source
+                            let p = apply(*A, p);
+                            let p = vec2::from(*source_offset)+p;
+                            if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { 0 } else {
+                                let s = source[uint2::from(p)];
+                                ((s-min)*0xFF/(max-min)) as u8
+                            }
+                        }
+                    });
+                    target[xy{x,y}] = u32::from(bgr8::from([ir,nir,nir]));
                 }
             }
             return Ok(());
@@ -126,7 +114,7 @@ impl ui::Widget for App {
 
         let debug = self.debug;
         let P = match self.which {
-            /*"nir" => {
+            "nir" => {
                 if debug=="original" { image::scale(target, nir.as_ref()); return Ok(()) }
                 let low = blur::<4, 4>(nir.as_ref()).unwrap(); // 9ms
                 if debug=="blur" { image::scale(target, low.as_ref()); return Ok(()) }
@@ -136,13 +124,12 @@ impl ui::Widget for App {
                 //let Some(P_nir) = checkerboard_quad_debug(high.as_ref(), true, 0/*Blur is enough*/ /*9*/, /*min_side: */64., debug, target)  else { return Ok(()) };
                 //let high = nir.as_ref();
                 let points = match checkerboard_direct_intersections::<32,4>(high.as_ref(), /*max_distance:*/64, debug) { Ok(points) => points, Err(image) => {image::scale(target, image.as_ref()); return Ok(()) }};
-                if debug=="points" { let (_, scale, offset) = image::scale(target, high.as_ref()); for &a in &points { cross(target, scale, offset, a.into(), 0xFF0000); } return Ok(()) }
-                let P = simplify(convex_hull(&points.iter().copied().map(vec2::from).collect::<Box<_>>())).try_into();
-                let P = P.map(|P_nir| long_edge_first(top_left_first(P_nir)));
-                let Ok(P) = P else { let (_, scale, offset) = image::scale(target, high.as_ref()); for a in points { cross(target, scale, offset, a.into(), 0xFF00000); } return Ok(()); };
+                let Q = convex_hull(&points.iter().copied().map(vec2::from).collect::<Box<_>>());
+                if debug=="points" || Q.len() < 4 { let (_, scale, offset) = image::scale(target, high.as_ref()); for &a in &points { cross(target, scale, offset, a.into(), 0xFF0000); } return Ok(()) }
+                let P = long_edge_first(top_left_first(simplify(Q)));
                 if debug=="quads" { let (_, scale, offset) = image::scale(target, nir.as_ref()); for a in P { cross(target, scale, offset, a, 0xFF0000); } return Ok(()) }
                 P
-            }*/
+            }
             "ir" => {
                 if debug=="original" { image::scale(target, ir.as_ref()); return Ok(()); }
                 /*let Some(low) = blur::<1,2>(ir.as_ref()) else {image::scale(target, ir.as_ref()); return Ok(()) };
@@ -277,13 +264,14 @@ impl ui::Widget for App {
             else if key=='⌫' { self.mode = Mode::Place; } 
             else if ['-','+','↑','↓','←','→'].contains(&key) {
                 //println!("{:?} {:?}", self.ir.calibration, apply(homography(self.ir.calibration), xy{x:1./2., y:1./2.}));
-                self.ir.calibration[1] = self.ir.calibration[1].map(|p| match key {
+                let offset = if self.which == "nir" { 8. } else { 1. };
+                self.calibration()[1] = self.calibration()[1].map(|p| match key {
                     '-' => (1.-0.1)*p,
                     '+' => 1.1*p,
-                    '↑' => xy{x: p.x, y: p.y-1.},
-                    '↓' => xy{x: p.x, y: p.y+1.},
-                    '←' => xy{x: p.x-1., y: p.y},
-                    '→' => xy{x: p.x+1., y: p.y},
+                    '↑' => xy{x: p.x, y: p.y-offset},
+                    '↓' => xy{x: p.x, y: p.y+offset},
+                    '←' => xy{x: p.x-offset, y: p.y},
+                    '→' => xy{x: p.x+offset, y: p.y},
                     _ => unreachable!()
                 });
                 //println!("{:?} {:?}", self.ir.calibration, apply(homography(self.ir.calibration), xy{x:1./2., y:1./2.}));

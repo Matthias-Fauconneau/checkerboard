@@ -4,10 +4,8 @@ pub struct NIR{
 }
 use image::{Image, xy};
 impl super::Camera for NIR {
-    fn new() -> Self {
-        let mut cameras = cameleon::u3v::enumerate_cameras().unwrap();
-        //for camera in &cameras { println!("{:?}", camera.info()); }
-        let mut camera = cameras.remove(0); // find(|c| c.info().contains("U3-368xXLE-NIR")).unwrap()
+    fn new(serial_number: &str) -> Self {
+        let mut camera = cameleon::u3v::enumerate_cameras().unwrap().into_iter().find(|c| c.info().serial_number == serial_number).unwrap();
         camera.open().unwrap();
         camera.load_context().unwrap();
         let mut params_ctxt = camera.params_ctxt().unwrap();
