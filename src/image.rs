@@ -147,8 +147,8 @@ pub(crate) fn cast_slice_box<A,B>(input: Box<[A]>) -> Box<[B]> { // ~bytemuck bu
 pub fn raw(name: &str, size: uint2) -> Option<Image<Box<[u16]>>> { Some(Image::new(size, cast_slice_box(std::fs::read(format!("{name}.{}x{}",size.x,size.y)).ok()?.into_boxed_slice()))) }
 
 pub fn write(path: impl AsRef<std::path::Path>, target: Image<&[u32]>) {
-    #[cfg(not(feature="png"))] unimplemented!("{:?} {target:?}", path.as_ref());
-    #[cfg(feature="png")] png::save_buffer(path, bytemuck::cast_slice(&target.data), target.size.x, target.size.y, png::ColorType::Rgba8).unwrap();
+    //#[cfg(not(feature="png"))] unimplemented!("{:?} {target:?}", path.as_ref());
+    #[cfg(feature="png")] imagers::save_buffer(path, bytemuck::cast_slice(&target.data), target.size.x, target.size.y, imagers::ColorType::Rgba8).unwrap();
 }
 /*pub fn open(path: impl AsRef<std::path::Path>) -> Image<Box<[u16]>> {
     #[cfg(not(feature="png"))] unimplemented!();

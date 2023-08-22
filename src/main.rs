@@ -238,13 +238,14 @@ impl ui::Widget for App {
         if let &ui::Event::Key(key) = event {
             if ['⎙','\u{F70C}'].contains(&key) {
                 //println!("⎙");
-                //write("checkerboard.png", {let mut target = Image::uninitialized(xy{x: 2592, y:1944}); let size = target.size; self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap(); target}.as_ref());
+                let i = (0..).find(|i| !(std::path::Path::new(&format!("{i}.png")).exists())).unwrap();
+                write(format!("{i}.png"), {let mut target = Image::uninitialized(xy{x: 2592, y:1944}); let size = target.size; self.paint(&mut target.as_mut(), size, xy{x: 0, y: 0}).unwrap(); target}.as_ref());
                 /*if self.last_frame.iter_mut().zip([/*"hololens",*/"nir","ir"]).filter_map(|(o,name)| o.take().map(|o| (name, o))).inspect(|(name, image)| write_raw(name, image.as_ref())).count() == 0 {
                     //if self.hololens.is_none() { self.hololens = Some(Hololens::new()); }
                     //if self.nir.is_none() { self.nir = Some(Calibrated::<NIR>::new("nir")); }
                     //if self.ir.is_none() { self.ir = Some(Calibrated::<IR>::new("ir")); }
                 }*/
-                self.save = true;
+                //self.save = true;
             } else if key=='\n' {
                 if let Some(last)= self.last {
                     self.calibration()[1] = last;

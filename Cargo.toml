@@ -5,7 +5,7 @@ nir=['dep:cameleon']
 ir=['dep:uvc']
 png=['imagers/png']
 hololens=['dep:ffmpeg']
-default=['dep:nalgebra','nir','ir']#,'png','hololens']
+default=['dep:nalgebra','nir','ir','png']
 
 [dependencies]
 bytemuck='*'
