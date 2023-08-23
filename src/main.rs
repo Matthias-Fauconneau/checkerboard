@@ -4,7 +4,7 @@
 use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}, ui::time};
 
 pub trait Camera : Sized {
-    fn new(serial_number: &str) -> Self;
+    fn new(serial_number: &str, gain: bool) -> Self;
     fn next(&mut self) -> Image<Box<[u16]>>;
 }
 mod nir; use nir::NIR;
@@ -22,9 +22,9 @@ struct Calibrated<T> {
 }
 impl<T:Camera> Calibrated<T> {
     const IDENTITY : [vec2; 4] = [xy{x: 0., y: 0.}, xy{x: 1., y: 0.}, xy{x: 1., y: 1.}, xy{x: 0., y: 1.}];
-    fn new(name: &str, serial_number: &str, rotate: bool) -> Self { 
+    fn new(name: &str, serial_number: &str, rotate: bool, gain: bool) -> Self { 
         Self{
-            camera: T::new(serial_number), 
+            camera: T::new(serial_number, gain), 
             calibration: std::fs::read(name).ok().filter(|data| data.len()==std::mem::size_of::<[[vec2; 4]; 2]>()).map(|data| *bytemuck::from_bytes(&data)).unwrap_or(
                 if rotate { [Self::IDENTITY, [xy{x: 1., y: 1.},xy{x: 0., y: 1.}, xy{x: 0., y: 0.}, xy{x: 1., y: 0.}]] }
                 else { [Self::IDENTITY; 2] }
@@ -47,9 +47,9 @@ struct App {
 }
 impl App { 
     fn new() -> Self { Self{
-        nir: Calibrated::<NIR>::new("nir","4104585450", false),
-        ir: Calibrated::<IR>::new("ir","", false),
-        fluo: Calibrated::<NIR>::new("fluo","4104590291", true),
+        nir: Calibrated::<NIR>::new("nir","4104585450", false, false),
+        ir: Calibrated::<IR>::new("ir","", false, false),
+        fluo: Calibrated::<NIR>::new("fluo","4104590291", true, true),
         mode: Mode::Use,
         last: None, 
         _bt40: /*{let mut bt40=BT40::new(); bt40.enable(); bt40}*/None, 
@@ -103,7 +103,7 @@ impl ui::Widget for App {
                             }
                         }
                     });
-                    target[xy{x,y}] = u32::from(bgr8::from([ir,nir,fluo]));
+                    target[xy{x,y}] = u32::from(bgr8::from([ir/2,fluo,nir]));
                 }
             }
             return Ok(());
@@ -298,6 +298,8 @@ fn main() -> ui::Result {
         }
         ui::run(TITLE, &mut Test{}) 
     } else {
+        //tracing::subscriber::set_global_default(tracing_subscriber::FmtSubscriber::new())?;
+        //for device in rusb::DeviceList::new().unwrap().iter() { device.open().unwrap().reset().unwrap(); }
         ui::run(TITLE, &mut App::new()) 
     }
 }
