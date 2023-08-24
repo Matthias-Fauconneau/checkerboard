@@ -76,6 +76,12 @@ impl ui::Widget for App {
         let nir = {let ref nir = full_nir; let size = xy{x: nir.size.x/128/16*16*128, y: nir.size.x/128/16*9*128}; nir.slice((nir.size-size)/2, size)};  // 16:9 => 2048x1152
         
         let ir = self.ir.camera.next();
+        let (mut argmax, mut max) = (xy{x:0,y:0}, 0);
+        for y in 0..ir.size.y {
+            for x in 0..ir.size.x {
+                if ir[xy{x,y}] > max { max = ir[xy{x,y}]; argmax = xy{x,y}; }
+            }
+        }
 
         let full_fluo = self.fluo.camera.next();
         let fluo = {let ref fluo = full_fluo; let size = xy{x: fluo.size.x/128/16*16*128, y: fluo.size.x/128/16*9*128}; fluo.slice((fluo.size-size)/2, size)};  // 16:9 => 2048x1152
@@ -103,9 +109,14 @@ impl ui::Widget for App {
                             }
                         }
                     });
-                    target[xy{x,y}] = u32::from(bgr8::from([ir/2,fluo,nir]));
+                    target[xy{x,y}] = u32::from(bgr8::from([ir/3,fluo,nir]));
                 }
             }
+            let [(_source, _source_offset, scale, target_offset, A, _min, _max),_,_] = ir_nir_fluo;
+            let p = apply(inverse(*A), vec2::from(argmax));
+            let p = f32::from(*scale)*(vec2::from(*target_offset) + p); // source -> target
+            dbg!(p);
+            ui::text(ui::white, &format!("{max}"), &[]).paint_fit(target, /*target.size*/xy{x: 256, y: 128}, int2::from(p));
             return Ok(());
         }
         let source = match self.which {

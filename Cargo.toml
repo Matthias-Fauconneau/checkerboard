@@ -16,7 +16,7 @@ image={git='https://github.com/Matthias-Fauconneau/image',features=['new_uninit'
 cameleon={version='*', features=['libusb'], optional=true}
 #cameleon={git='https://github.com/cameleon-rs/cameleon', features=['libusb'], optional=true}
 serialport="*"
-ui={git='https://github.com/Matthias-Fauconneau/ui',features=['generators']} #'softbuffer'#default-features=false,
+ui={git='https://github.com/Matthias-Fauconneau/ui',features=['generators','text']}
 imageproc='*'
 itertools='*'
 uvc={package='uvc-sys', git='https://github.com/l1npengtul/libuvc-rs', optional=true}
@@ -25,6 +25,7 @@ ffmpeg={version='*', package='ffmpeg-next', default-features=false, features=['c
 tracing='*'
 tracing-subscriber='*'
 #rusb='*'
+rustix='*'
 
 [patch.'https://github.com/Matthias-Fauconneau/ui']
 ui={path='../ui'}
