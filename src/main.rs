@@ -1,4 +1,7 @@
 //sudo sh -c 'echo 32 > /sys/module/usbcore/parameters/usbfs_memory_mb'
+//sudo chmod a+rw /dev/bus/usb/001/037 #IR camera #FIXME: worked without on laptop, udev rule? group?
+//usbreset 002/012 && usbreset 002/013 #NIR cameras
+//cargo run --release
 #![feature(generators,iter_from_generator,array_methods,slice_flatten,portable_simd,pointer_byte_offsets,new_uninit,generic_arg_infer,array_try_map,array_windows,slice_take,stdsimd,iter_map_windows)]
 #![allow(non_camel_case_types,non_snake_case,unused_imports,dead_code)]
 use {vector::{xy, uint2, size, int2, vec2}, ::image::{Image,bgr8}, ui::time};
@@ -81,29 +84,50 @@ impl ui::Widget for App {
         let fluo = {let ref fluo = full_fluo; let size = xy{x: fluo.size.x/128/16*16*128, y: fluo.size.x/128/16*9*128}; fluo.slice((fluo.size-size)/2, size)};  // 16:9 => 2048x1152
 
         if let Mode::Use = self.mode {
-            let ref ir_nir_fluo = [(ir.as_ref(), self.ir.calibration, xy{x: 0, y: 0}), (full_nir.as_ref(), self.nir.calibration, (full_nir.size-nir.size)/2), (full_fluo.as_ref(), self.fluo.calibration, (full_fluo.size-fluo.size)/2)]
+            let [ref ir, ref nir, ref fluo] = [(ir.as_ref(), self.ir.calibration, xy{x: 0, y: 0}), (full_nir.as_ref(), self.nir.calibration, (full_nir.size-nir.size)/2), (full_fluo.as_ref(), self.fluo.calibration, (full_fluo.size-fluo.size)/2)]
             .map(|(source, calibration, source_offset)| {
                 let scale = num::Ratio{num: target.size.y, div: source.size.y};
                 let target_offset = xy{x: (target.size.x-scale*source.size.x)/2, y: (target.size.y-scale*source.size.y)/2};
                 let A = homography(calibration);
                 let vector::MinMax{min, max} = vector::minmax(source.iter().copied()).unwrap(); // FIXME
-                (source, source_offset, scale, target_offset, A, min, max)
+                let bounds = {
+                    let p = |p| { // source -> target
+                        let p = apply(inverse(A), vec2::from(p));
+                        int2::from(f32::from(scale)*(vec2::from(target_offset) + p))
+                    };
+                    vector::minmax([p(xy{x: 0, y: 0}), p(xy{x: source.size.x, y: 0}), p(source.size), p(xy{x: 0, y: source.size.y})]).unwrap()
+                };
+                //println!("{bounds:?}");
+                (source, source_offset, scale, target_offset, A, min, max, bounds)
             });
-            for y in 0..target.size.y {
-                for x in 0..target.size.x {
-                    let [ir, nir, fluo] = ir_nir_fluo.each_ref().map(|(source, source_offset, scale, target_offset, A, min, max)| {
-                        if !(min<max) { 0 } else {
-                            let scale_from_target_to_source = 1./f32::from(*scale);
-                            let p = scale_from_target_to_source*(xy{x: x as f32, y: y as f32} - vec2::from(*target_offset)); // target->source
-                            let p = apply(*A, p);
-                            let p = vec2::from(*source_offset)+p;
-                            if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { 0 } else {
-                                let s = source[uint2::from(p)];
-                                ((s-min)*0xFF/(max-min)) as u8
-                            }
+            //let bounds = ir.7.clip(nir.7.clip(fluo.7)).clip(vector::MinMax{min: xy{x:0,y:0}, max: target.size.signed()});
+            //println!("{bounds:?}");
+            let bounds = vector::MinMax{min: xy{x:0,y:0}, max: target.size.signed()};
+            let ir_mean = (ir.0.iter().map(|&v| v as u32).sum::<u32>()/ir.0.len() as u32) as u16;
+            for y in bounds.min.y..bounds.max.y {
+                for x in bounds.min.x..bounds.max.x {
+                    let sample = |source: &Image<&[u16]>, source_offset: uint2, scale : num::Ratio, target_offset: uint2, A: mat3| {
+                        let scale_from_target_to_source = 1./f32::from(scale);
+                        let p = scale_from_target_to_source*(xy{x: x as f32, y: y as f32} - vec2::from(target_offset)); // target->source
+                        let p = apply(A, p);
+                        let p = vec2::from(source_offset)+p;
+                        if p.x < 0. || p.x >= source.size.x as f32 || p.y < 0. || p.y >= source.size.y as f32 { 0 } 
+                        else { source[uint2::from(p)] }
+                    };
+                    let [nir, fluo] = [nir, fluo].map(|(source, source_offset, scale, target_offset, A, min, max, _)| {
+                        if !(min<max) { 0 } else { 
+                            let s = sample(source, *source_offset, *scale, *target_offset, *A);
+                            ((s-min)*0xFF/(max-min)) as u8
                         }
                     });
-                    target[xy{x,y}] = u32::from(bgr8::from([ir/2,fluo,nir]));
+                    let ir = {let (source, source_offset, scale, target_offset, A, min, max, _) = ir;
+                        if !(min<max) { 0 } else { 
+                            let s = sample(source, *source_offset, *scale, *target_offset, *A);
+                            let min = ir_mean;//(min+max)/2;
+                            if s <= min { 0 } else { ((s-min)*0xFF/(max-min)) as u8 }
+                        }
+                    };
+                    target[xy{x,y}.unsigned()] = u32::from(bgr8::from([ir,fluo,nir]));
                 }
             }
             return Ok(());

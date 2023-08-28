@@ -26,5 +26,5 @@ tracing='*'
 tracing-subscriber='*'
 #rusb='*'
 
-[patch.'https://github.com/Matthias-Fauconneau/ui']
-ui={path='../ui'}
+#[patch.'https://github.com/Matthias-Fauconneau/ui']
+#ui={path='../ui'}
